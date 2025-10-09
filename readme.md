@@ -29,3 +29,4 @@ In the pop-up:
 Then just run the code.
 
 ### 3.3.2. Execute remotely (VM)
+https://uantwerpen.sharepoint.com/:w:/r/sites/I-Distributed-Artificial-Intelligence-Project-Group-2/Gedeelde%20documenten/Setup/Ssh%20connectie%20instellen.docx?d=wc48aeb1e13c24be69550ce7cd44ce874&csf=1&web=1&e=sXaHOt
