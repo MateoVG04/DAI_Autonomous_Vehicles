@@ -1,0 +1,47 @@
+[project]
+name="autonomous_driving"
+version="0.1.0"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "carla>=0.9.15",
+]
+
+[tool.black]
+line-length = 120
+
+[tool.mypy]
+ignore_missing_imports = true
+namespace_packages = true
+mypy_path = "./jupyter_notebooks:./simulation"
+
+[tool.isort]
+known_first_party = ["jupyter_notebooks", "simulation"]
+
+# This is to make isort compatible with Black. See
+# https://black.readthedocs.io/en/stable/the_black_code_style.html#how-black-wraps-lines.
+line_length=120
+multi_line_output=3
+include_trailing_comma = true
+force_grid_wrap=0
+use_parentheses = true
+
+[tool.ruff]
+# General settings
+extend-exclude = ["jupyter_notebooks"]
+
+lint.select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    # "I",  # isort
+    "C",  # flake8-comprehensions
+    "B",  # flake8-bugbear
+]
+lint.ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "C408",  # dict used instead of {} -> this is not a performance critical application
+    "W291",  # Trailing whitespace -> Really just not worth fixing every time
+]
