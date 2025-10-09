@@ -5,6 +5,15 @@
 
 # 3. Development setup
 ## 3.1. IDE
+### 3.1.1. Install python-carla for virtual environment.
+Downloading existing wheels for carla api here: https://www.wheelodex.org/projects/carla/wheels/carla-0.9.16-cp312-cp312-win_amd64.whl/
+Make sure you select the correct version and platform.
+
+*Example for Windows 3.12*
+1) Create a new virtual environment on Python 3.12 
+2) Download carla-0.9.16-cp312-cp312-win_amd64.whl
+3) In pycharm, open terminal, go to /Downloads
+4) Run `pip install carla-0.9.16-cp312-cp312-win_amd64.whl`
 
 ## 3.2. Carla simulatie
 
