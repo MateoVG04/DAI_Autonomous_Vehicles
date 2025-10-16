@@ -15,7 +15,7 @@ pos_shape = (MAX_ACTORS, 3)
 img_shape = (IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNELS)
 pos_size = np.prod(pos_shape) * 8  # float64
 img_size = np.prod(img_shape)      # uint8
-FILENAME = "carla_shared.dat"
+FILENAME = "/home/shared/carla_shared.dat"
 
 total_size = pos_size + img_size
 
