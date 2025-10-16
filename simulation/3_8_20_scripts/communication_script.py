@@ -5,7 +5,7 @@ import numpy as np
 from shared_memory_utils import SharedMemoryManager
 
 # --- Shared memory setup ---
-FILENAME = "/home/shared/carla_shared.dat"
+FILENAME = "/dev/shm/carla_shared.dat"
 MAX_ACTORS = 100
 IMAGE_WIDTH = 320
 IMAGE_HEIGHT = 240
