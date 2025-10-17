@@ -11,7 +11,7 @@ FILENAME = "/dev/shm/test_carla_shared.dat"
 class TestCarlaBuffer:
     def test_shared_memory_image(self):
         # ----- Setup -----
-        width, height = 320, 240
+        height, width = 320, 240
         img_array = np.random.randint(0, 256, size=(height, width, 4), dtype=np.uint8)
 
         # Create a simple fake carla.Image object with .raw_data
@@ -22,13 +22,13 @@ class TestCarlaBuffer:
         )
 
         carla_buffer = CarlaWrapper(filename=FILENAME)
+        carla_buffer.clear()
 
         # ----- Execute -----
         carla_buffer.write_image(image=fake_carla_img)
 
         # ----- Read back -----
-        read_back = carla_buffer.read_images()
-        read_back = carla_buffer.read_images()
+        read_back = carla_buffer.read_image(0)
         img_array2 = np.array(read_back).reshape(height, width, 4)
 
         # ----- Assert -----
