@@ -98,18 +98,21 @@ class SharedMemoryManager:
 
 class CarlaWrapper:
     class CarlaDataType(IntEnum):
-        images = 1
+        images = 0
 
-    def __init__(self, filepath):
+    def __init__(self, filename):
         data_arrays = [
-            SharedMemoryArray(data_shape=[32, 32, 1],
+            SharedMemoryArray(data_shape=[320, 240, 4],
                               reserved_count=100,
                               datatype=np.uint8),
         ]
-        self.shared_memory = SharedMemoryManager(filename=filepath,
+        self.shared_memory = SharedMemoryManager(filename=filename,
                                                  data_arrays=data_arrays)
 
     def write_image(self, image):
         array = np.frombuffer(image.raw_data, dtype=np.uint8)
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.images.value, input_data=array)
         return
+
+    def read_images(self) -> np.ndarray:
+        return self.shared_memory.read_data_array(shared_array_index=self.CarlaDataType.images.value)
