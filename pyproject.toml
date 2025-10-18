@@ -5,6 +5,9 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "carla>=0.9.15",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+    "opentelemetry-instrumentation-logging",
 ]
 
 [tool.black]
