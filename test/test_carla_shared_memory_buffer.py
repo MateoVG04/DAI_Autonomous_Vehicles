@@ -1,9 +1,5 @@
-from io import BytesIO
 from types import SimpleNamespace
-
 import numpy as np
-from PIL import Image
-
 from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
 FILENAME = "/dev/shm/test_carla_shared.dat"

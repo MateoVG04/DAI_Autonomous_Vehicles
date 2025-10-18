@@ -93,18 +93,30 @@ class SharedMemoryManager:
         with open(filepath, "wb") as f:
             f.write(b"\x00" * self.total_size)
 
-    def set_write_index(self, buffer_index: int, index_value: int):
-        self._write_index_mm[buffer_index] = index_value
-        self._mm.flush()
-
+    # -----
+    # write_index operations
+    # -----
     def current_index(self, shared_array_index: int) -> int:
         return int(self._write_index_mm[shared_array_index])
 
+    def set_write_index(self, shared_array_index: int, index_value: int):
+        self._write_index_mm[shared_array_index] = index_value
+        self._mm.flush()
+
+    def increment_write_index(self, shared_array_index: int):
+        next_index = self.current_index(shared_array_index)+1
+        if next_index == self.data_arrays[shared_array_index].reserved_count:
+            next_index = 0 # This makes the write_index circular
+        self.set_write_index(shared_array_index=shared_array_index, index_value=next_index)
+
+    # -----
+    # Write operations
+    # -----
     def write_data(self, shared_array_index: int, input_data: np.ndarray):
         self.write_data_at(shared_array_index=shared_array_index,
                            write_index=self.current_index(shared_array_index),
                            input_data=input_data)
-        self.set_write_index(buffer_index=shared_array_index, index_value=self.current_index(shared_array_index)+1)
+        self.increment_write_index(shared_array_index=shared_array_index)
 
     def write_data_at(self, shared_array_index: int, write_index: int, input_data: np.ndarray):
         shared_array = self.data_arrays[shared_array_index]
@@ -114,6 +126,9 @@ class SharedMemoryManager:
         self._mm[start:end] = array
         self._mm.flush()
 
+    # -----
+    # Read operations
+    # -----
     def read_data_array(self, shared_array_index: int) -> np.ndarray:
         # Return a snapshot (copy) to avoid referencing live memory
         shared_array = self.data_arrays[shared_array_index]

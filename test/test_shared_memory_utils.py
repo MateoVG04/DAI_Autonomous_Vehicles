@@ -39,7 +39,6 @@ class TestSharedMemoryBuffer:
         img_array = np.random.randint(0, 256, size=(height, width, 4), dtype=np.uint8)
 
         # Encode to bytes (simulate image being shared)
-        pil_img = Image.fromarray(img_array)
         buf = BytesIO()
         pil_img = Image.fromarray(img_array)
         img_bytes = np.array(pil_img, dtype=np.uint8).ravel()
