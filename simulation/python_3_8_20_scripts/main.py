@@ -23,7 +23,7 @@ from agents.tools.misc import compute_distance, get_speed
 print("CARLA loaded from:", carla.__file__)
 
 # ==============================================================================
-# -- setup methods --------------------------------------------------------------
+# -- Telemetry --------------------------------------------------------------
 # ==============================================================================
 def setup_telemetry(address: str, port: int, send_to_otlp: bool = True, log_to_console: bool = True):
     endpoint = f"{address}:{port}"
@@ -79,6 +79,22 @@ def setup_telemetry(address: str, port: int, send_to_otlp: bool = True, log_to_c
         f"Telemetry initialized (OTLP endpoint={endpoint}, console_logging={log_to_console})"
     )
 
+def setup_vehicle_metrics(meter):
+    distance_hist = meter.create_histogram(
+        name="distance_to_destination_m",
+        unit="m",
+        description="Distance to the destination waypoint per tick"
+    )
+    speed_hist = meter.create_histogram(
+        name="vehicle_speed_kmh",
+        unit="km/h",
+        description="Vehicle speed per tick"
+    )
+    return distance_hist, speed_hist
+
+# ==============================================================================
+# -- setup methods --------------------------------------------------------------
+# ==============================================================================
 def setup_carla(client: carla):
     client.set_timeout(10.0)
     try:
@@ -130,60 +146,33 @@ def setup_player(world):
     actor.apply_physics_control(physics_control)
     return actor
 
-# ==============================================================================
-# -- Agent() --------------------------------------------------------------
-# ==============================================================================
+
+
 def record_world(world):
     amount_of_vehicles = world.get_actors().filter("*vehicle*")
 
-def record_agent_state(vehicle, agent, meter):
-    location = vehicle.get_location()
-    vel = vehicle.get_velocity()
-    speed = (3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2))
+def record_agent_state(world, vehicle, agent, logger, distance_hist, speed_hist):
+    ts = world.get_snapshot().timestamp
+    attrs = {
+        "simulation.frame": ts.frame,
+        "simulation.elapsed_seconds": ts.elapsed_seconds,
+    }
+    loc = vehicle.get_location()
+    dest_loc = agent._local_planner._waypoints_queue[-1][
+        0].transform.location if agent._local_planner._waypoints_queue else None
+    dist = compute_distance(loc, dest_loc) if dest_loc else float("inf")
+    speed = get_speed(vehicle)
 
-    # Get distance to destination
-    dest_loc = agent._local_planner._waypoints_queue[-1][0].transform.location if agent._local_planner._waypoints_queue else None
-    dist_to_dest = compute_distance(location, dest_loc) if dest_loc else float('inf')
+    distance_hist.record(dist, attributes=attrs)
+    speed_hist.record(speed, attributes=attrs)
 
-    # Record metrics
-    vehicle_speed_gauge = meter.create_gauge(
-        name="vehicle_speed_kmh",
-        unit="km/h",
-        description="Current speed of the vehicle in km/h"
-    )
-    location_x_gauge = meter.create_gauge(
-        name="vehicle_location_x",
-        unit="meters",
-        description="Vehicle's x-coordinate in the world"
-    )
-    location_y_gauge = meter.create_gauge(
-        name="vehicle_location_y",
-        unit="meters",
-        description="Vehicle's y-coordinate in the world"
-    )
-    location_z_gauge = meter.create_gauge(
-        name="vehicle_location_z",
-        unit="meters",
-        description="Vehicle's z-coordinate in the world"
-    )
-    distance_to_dest_gauge = meter.create_gauge(
-        name="distance_to_destination_m",
-        unit="meters",
-        description="Distance to the destination waypoint"
-    )
-
-    # Record values
-    vehicle_speed_gauge.set(speed)
-    location_x_gauge.set(location.x)
-    location_y_gauge.set(location.y)
-    location_z_gauge.set(location.z)
-    distance_to_dest_gauge.set(dist_to_dest)
+    logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
 
 # ==============================================================================
 # -- Agent() --------------------------------------------------------------
 # ==============================================================================
 def set_random_destination(world, agent):
-    spawn_points = world.map.get_spawn_points()
+    spawn_points = world.get_map().get_spawn_points()
     destination = random.choice(spawn_points).location
     agent.set_destination(destination)
 
@@ -206,6 +195,7 @@ def main():
     tracer = trace.get_tracer(__name__)
     logger = logging.getLogger(__name__)
     meter = metrics.get_meter(__name__)
+    distance_hist, speed_hist = setup_vehicle_metrics(meter=meter)
 
     logger.info("carla.Client setup started")
     carla_client = carla.Client('localhost', 2000)
@@ -229,22 +219,24 @@ def main():
 
     # 4) Simulation
     end_simulation = False
-    spawn_points = world.get_map().get_spawn_points()
-    destination = random.choice(spawn_points).location
-    agent.set_destination(destination)
+    set_random_destination(world, agent)
 
     logger.info("Starting simulation")
     while not end_simulation:
-        with tracer.start_as_current_span("control_loop"):
-            record_agent_state(vehicle=agent._vehicle, agent=agent, meter=meter)
+        ts = world.get_snapshot().timestamp
+        with tracer.start_as_current_span("control_loop",
+                                          attributes={
+                                              "simulation.frame": ts.frame,
+                                              "simulation.elapsed_seconds": ts.elapsed_seconds,
+                                          }
+                                          ):
+            record_agent_state(world=world,
+                               vehicle=agent._vehicle,
+                               agent=agent,
+                               logger=logger,
+                               distance_hist=distance_hist,
+                               speed_hist=speed_hist)
             world.tick()  # synchronous mode
-
-            # Log diagnostic information
-            current_loc = agent._vehicle.get_location()
-            dest_loc = agent._local_planner._waypoints_queue[-1][0].transform.location if agent._local_planner._waypoints_queue else None
-            dist_to_dest = compute_distance(current_loc, dest_loc) if dest_loc else float('inf')
-            speed = get_speed(agent._vehicle)
-            logger.info(f"Current location: {current_loc}, Distance to dest: {dist_to_dest:.2f}m, Speed: {speed:.2f} km/h")
 
             # Guard clause
             if agent.done():
@@ -252,11 +244,8 @@ def main():
                 if not loop_count or loop_count == 0:
                     end_simulation = True
                     break
-
                 loop_count -= 1
-                spawn_points = world.get_map().get_spawn_points()
-                destination = random.choice(spawn_points).location
-                agent.set_destination(destination)
+                set_random_destination(world, agent)
 
             # Stepping the agent
             control = agent.run_step()
