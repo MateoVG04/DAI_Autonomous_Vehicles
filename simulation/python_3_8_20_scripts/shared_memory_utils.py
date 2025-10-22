@@ -158,9 +158,9 @@ class CarlaWrapper:
     class CarlaDataType(IntEnum):
         images = 0
 
-    def __init__(self, filename):
+    def __init__(self, filename, image_width: int, image_height: int):
         data_arrays = [
-            SharedMemoryArray(data_shape=[320, 240, 4],
+            SharedMemoryArray(data_shape=[image_width, image_height, 4],
                               reserved_count=100,
                               datatype=np.uint8),
         ]
@@ -180,3 +180,7 @@ class CarlaWrapper:
 
     def read_image(self, index: int) -> np.ndarray:
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=index)
+
+    @property
+    def latest_image_index(self) -> int:
+        return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)

@@ -20,6 +20,7 @@ from agents.navigation.basic_agent import BasicAgent
 import carla
 
 from agents.tools.misc import compute_distance, get_speed
+from simulation.python_3_8_20_scripts.camera_control import CameraManager
 from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
 print("CARLA loaded from:", carla.__file__)
@@ -123,7 +124,7 @@ def random_spawn(world, blueprint):
     spawn_point.rotation.pitch = 0.0
     return world.try_spawn_actor(blueprint, spawn_point)
 
-def setup_player(world):
+def setup_vehicle(world):
     logger = logging.getLogger()
 
     # Get a random blueprint.
@@ -167,7 +168,7 @@ def record_agent_state(world, vehicle, agent, logger, distance_hist, speed_hist)
     distance_hist.record(dist, attributes=attrs)
     speed_hist.record(speed, attributes=attrs)
 
-    # logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
+    logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
 
 # ==============================================================================
 # -- Agent() --------------------------------------------------------------
@@ -203,22 +204,29 @@ def main():
     setup_carla(logger=logger, client=carla_client)
     logger.info("Carla Client started setup finished")
 
-    # shared_memory = CarlaWrapper(filename="/dev/shm/carla_shared.dat")
-
     # -----
     # Starting the control loop
     # -----
     # 2) Carla
     logger.info("Setting up vehicle")
     world = carla_client.get_world()
-    player = setup_player(world=world)
+    vehicle = setup_vehicle(world=world)
 
     world.tick()  # fixme test if this is required
 
+    logger.info("Setting up cameras")
+    camera = CameraManager(parent_actor=vehicle,
+                           camera_width=(camera_width := 640),
+                           camera_height=(camera_height := 640),
+                           shared_memory_filepath=(shared_memory_filepath := "/dev/shm/carla_shared.dat"))
+    camera.set_sensor(1)  # rbg (fixme)
+
+    shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width, image_height=camera_height)
+
     # 3) Agent
     logger.info("Setting up agent")
-    agent = BasicAgent(vehicle=player, target_speed=30)
-    logger.info(f"Setup finished for vehicle at {player.get_location()}")
+    agent = BasicAgent(vehicle=vehicle, target_speed=30)
+    logger.info(f"Setup finished for vehicle at {vehicle.get_location()}")
 
     # 4) Simulation
     end_simulation = False
@@ -251,11 +259,12 @@ def main():
 
                     control = agent.run_step()
                     control.manual_gear_shift = False
-                    player.apply_control(control)
+                    vehicle.apply_control(control)
 
             # Trip done
             drive_span.set_status(Status(StatusCode.OK))
             logger.info("Destination reached")
+            logger.info(f"Image index {shared_memory.latest_image_index}")
 
             loop_count -= 1
             if not loop_count or loop_count == 0:
@@ -266,8 +275,19 @@ def main():
     # -----
     # Cleaning up
     # -----
+    logger.info(f"Current index for image buffer {shared_memory}")
+
     logger.info("Closing down ..")
-    player.destroy()
+    try:
+        camera.sensor.destroy()
+        for sensor in camera.sensors:
+            sensor.destroy()
+    except Exception as e:
+        logger.warning(e)
+    try:
+        vehicle.destroy()
+    except Exception as e:
+        logger.warning(e)
     logger.info("Exitting ..")
 
 if __name__ == '__main__':
