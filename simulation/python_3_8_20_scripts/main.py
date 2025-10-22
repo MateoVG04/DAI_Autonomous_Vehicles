@@ -14,11 +14,13 @@ from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk._logs import LoggingHandler, LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry.trace import Status, StatusCode
 
 from agents.navigation.basic_agent import BasicAgent
 import carla
 
 from agents.tools.misc import compute_distance, get_speed
+from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
 print("CARLA loaded from:", carla.__file__)
 
@@ -29,19 +31,19 @@ def setup_telemetry(address: str, port: int, send_to_otlp: bool = True, log_to_c
     endpoint = f"{address}:{port}"
     insecure = "https://" not in endpoint
 
+    # Create a resource
+    resource = Resource.create(attributes={"service.name": "carla-simulation"})
+
     # -----
     # Setting up tracing
     if send_to_otlp:
-        trace.set_tracer_provider(TracerProvider())
+        trace.set_tracer_provider(TracerProvider(resource=resource))
         trace.get_tracer_provider().add_span_processor(
             BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=insecure)))
 
     # -----
     # Setting up metrics
     if send_to_otlp:
-        # Create a resource for the metrics
-        resource = Resource.create(attributes={"service.name": "carla-simulation"})
-
         # Initialize the OTLP metric exporter
         otlp_exporter = OTLPMetricExporter(
             endpoint=endpoint,  # e.g., "http://localhost:4317"
@@ -95,22 +97,23 @@ def setup_vehicle_metrics(meter):
 # ==============================================================================
 # -- setup methods --------------------------------------------------------------
 # ==============================================================================
-def setup_carla(client: carla):
+def setup_carla(logger, client: carla):
+    server_version = client.get_server_version()
+    client_version = client.get_client_version()
+    logger.info(f"Client: {client_version} - Server: {server_version}")
+
     client.set_timeout(10.0)
-    try:
-        traffic_manager = client.get_trafficmanager()
-        sim_world = client.get_world()
+    traffic_manager = client.get_trafficmanager()  # this is crashing
+    sim_world = client.get_world()
 
-        # -----
-        # Synchronisation configuration
-        settings = sim_world.get_settings()
-        settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 0.05
-        sim_world.apply_settings(settings)
+    # -----
+    # Synchronisation configuration
+    settings = sim_world.get_settings()
+    settings.synchronous_mode = True
+    settings.fixed_delta_seconds = 0.05
+    sim_world.apply_settings(settings)
 
-        traffic_manager.set_synchronous_mode(True)
-    except Exception as e:
-        raise e
+    traffic_manager.set_synchronous_mode(True)
 
 def random_spawn(world, blueprint):
     spawn_points = world.get_map().get_spawn_points()
@@ -146,8 +149,6 @@ def setup_player(world):
     actor.apply_physics_control(physics_control)
     return actor
 
-
-
 def record_world(world):
     amount_of_vehicles = world.get_actors().filter("*vehicle*")
 
@@ -166,7 +167,7 @@ def record_agent_state(world, vehicle, agent, logger, distance_hist, speed_hist)
     distance_hist.record(dist, attributes=attrs)
     speed_hist.record(speed, attributes=attrs)
 
-    logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
+    # logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
 
 # ==============================================================================
 # -- Agent() --------------------------------------------------------------
@@ -186,7 +187,7 @@ def main():
     telemetry_address= "http://localhost"
     telemetry_port = 4317
     do_loop = False
-    loop_count = 5
+    loop_count = 1
 
     # -----
     # Setting up
@@ -199,8 +200,10 @@ def main():
 
     logger.info("carla.Client setup started")
     carla_client = carla.Client('localhost', 2000)
-    setup_carla(client=carla_client)
+    setup_carla(logger=logger, client=carla_client)
     logger.info("Carla Client started setup finished")
+
+    # shared_memory = CarlaWrapper(filename="/dev/shm/carla_shared.dat")
 
     # -----
     # Starting the control loop
@@ -223,34 +226,42 @@ def main():
 
     logger.info("Starting simulation")
     while not end_simulation:
-        ts = world.get_snapshot().timestamp
-        with tracer.start_as_current_span("control_loop",
-                                          attributes={
-                                              "simulation.frame": ts.frame,
-                                              "simulation.elapsed_seconds": ts.elapsed_seconds,
-                                          }
-                                          ):
-            record_agent_state(world=world,
-                               vehicle=agent._vehicle,
-                               agent=agent,
-                               logger=logger,
-                               distance_hist=distance_hist,
-                               speed_hist=speed_hist)
-            world.tick()  # synchronous mode
+        with tracer.start_as_current_span("drive_to_destination") as drive_span:
+            drive_span.set_attribute("destination.distance", 0) # fixme
+            drive_span.set_attribute("loop.count_start", loop_count)
+            while not agent.done():
+                ts = world.get_snapshot().timestamp
 
-            # Guard clause
-            if agent.done():
-                logger.info("Destination reached")
-                if not loop_count or loop_count == 0:
-                    end_simulation = True
-                    break
-                loop_count -= 1
-                set_random_destination(world, agent)
+                with tracer.start_as_current_span(
+                        "control_loop",
+                        attributes={
+                            "simulation.frame": ts.frame,
+                            "simulation.elapsed_seconds": ts.elapsed_seconds,
+                        }
+                ) as loop_span:
+                    record_agent_state(
+                        world=world,
+                        vehicle=agent._vehicle,
+                        agent=agent,
+                        logger=logger,
+                        distance_hist=distance_hist,
+                        speed_hist=speed_hist,
+                    )
+                    world.tick()  # synchronous mode
 
-            # Stepping the agent
-            control = agent.run_step()
-            control.manual_gear_shift = False
-            player.apply_control(control)
+                    control = agent.run_step()
+                    control.manual_gear_shift = False
+                    player.apply_control(control)
+
+            # Trip done
+            drive_span.set_status(Status(StatusCode.OK))
+            logger.info("Destination reached")
+
+            loop_count -= 1
+            if not loop_count or loop_count == 0:
+                end_simulation = True
+                break
+            set_random_destination(world, agent)
 
     # -----
     # Cleaning up
