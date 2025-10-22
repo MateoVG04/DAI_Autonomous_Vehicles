@@ -184,3 +184,6 @@ class CarlaWrapper:
     @property
     def latest_image_index(self) -> int:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)
+
+    def read_latest_image(self) -> np.ndarray:
+        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=self.latest_image_index)
