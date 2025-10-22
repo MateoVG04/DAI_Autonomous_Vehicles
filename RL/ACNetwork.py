@@ -97,7 +97,8 @@ class ActorCriticNetwork(nn.Module):
         speed = F.relu(self.speed_fc2(speed))
         speed = F.relu(self.speed_fc3(speed))
         speed = F.relu(self.speed_fc4(speed))
-        speed_out = F.relu(self.speed_fc5(speed))
+        # No ReLU because we might also want negative throttle = braking
+        speed_out = self.speed_fc5(speed)
 
         shared_features = torch.cat([steer_out, speed_out],dim=1)
         shared_features = self.head_reduce(shared_features)
@@ -107,35 +108,14 @@ class ActorCriticNetwork(nn.Module):
         std = torch.exp(log_std).unsqueeze(0).expand_as(mean)
         value = self.critic(shared_features)
         return mean, std, value
-        #
-        # action_mean = torch.tanh(self.actor_mean(shared_features))
-        # action_std = torch.exp(self.actor_log_std.clamp(-20, 2))
-        # state_value = self.critic(shared_features)
-        # return action_mean, action_std, state_value
-
-    def sample_action(self, state):
-        action_mean, action_std, _ = self(state)
-
-        # Create normal distribution
-        dist = torch.distributions.Normal(action_mean, action_std)
-
-        # Sample and bound action
-        raw_action = dist.rsample()
-        action = torch.tanh(raw_action)
-
-        # Compute log probability with adjustment for tanh squashing
-        log_prob = dist.log_prob(raw_action)
-        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
-        log_prob = log_prob.sum(dim=-1)
-
-        return action, log_prob
 
     @torch.no_grad()
-    def sample_action(self, images, distances_to_vehicle=None, speed_signs=None, pedestrians=None, red_lights=None):
-        mean, std, _ = self(images, distances_to_vehicle, speed_signs, pedestrians, red_lights)
+    def sample_action(self, images, current_speed,distances_to_vehicle=None, speed_signs=None, pedestrians=None, red_lights=None):
+        mean, std, _ = self(images, current_speed, distances_to_vehicle, speed_signs, pedestrians, red_lights)
         dist = torch.distributions.Normal(mean, std)
         raw = dist.rsample()
         action = torch.tanh(raw)
+        #adjustment for tanh squashing
         log_prob = dist.log_prob(raw) - torch.log(1 - action.pow(2) + 1e-6)
         log_prob = log_prob.sum(dim=-1)
         return action, log_prob
