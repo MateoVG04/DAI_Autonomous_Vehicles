@@ -1,8 +1,13 @@
 from enum import IntEnum
 from pathlib import Path
 from typing import List
+
+import carla
 import numpy as np
 import os
+from PIL import Image
+from matplotlib import pyplot as plt
+
 
 class SharedMemoryArray:
     def __init__(self,
@@ -44,6 +49,8 @@ class SharedMemoryManager:
 
         :param filename:
         """
+        self.filepath_str: str = filename
+
         # ----- Data Arrays
         self.write_array = SharedMemoryArray(data_shape=[1], reserved_count=len(data_arrays), datatype=np.uint8)
         self.data_arrays = data_arrays
@@ -92,6 +99,7 @@ class SharedMemoryManager:
     def init_file(self, filepath: Path):
         with open(filepath, "wb") as f:
             f.write(b"\x00" * self.total_size)
+            os.chmod(filepath, 0o666)
 
     # -----
     # write_index operations
@@ -143,24 +151,23 @@ class SharedMemoryManager:
                        ))
 
     def read_data(self, shared_array_index: int, slot_index: int):
-        # Return a snapshot (copy) to avoid referencing live memory
         shared_array = self.data_arrays[shared_array_index]
-        starting_pos = self.write_offset(buffer_index=shared_array_index, slot_index=slot_index)
+        start = self.write_offset(buffer_index=shared_array_index, slot_index=slot_index)
+        buf = self._mm[start:start + shared_array.slot_size]
+        return np.frombuffer(buf, dtype=shared_array.datatype).reshape(shared_array.data_shape).copy()
 
-        return np.copy(np.ndarray(
-            shape=shared_array.data_shape,
-                       dtype=shared_array.datatype,
-                       buffer=self._mm[starting_pos:starting_pos + shared_array.slot_size].view(
-                           shared_array.datatype)
-                       ))
 
 class CarlaWrapper:
     class CarlaDataType(IntEnum):
         images = 0
+        object_detected = 1
 
-    def __init__(self, filename):
+    def __init__(self, filename, image_width: int, image_height: int):
         data_arrays = [
-            SharedMemoryArray(data_shape=[320, 240, 4],
+            SharedMemoryArray(data_shape=[image_height, image_width, 3], # Raw images
+                              reserved_count=100,
+                              datatype=np.uint8),
+            SharedMemoryArray(data_shape=[image_height, image_width, 3], # Object Detected images
                               reserved_count=100,
                               datatype=np.uint8),
         ]
@@ -170,8 +177,15 @@ class CarlaWrapper:
     def clear(self):
         self.shared_memory.clear()
 
+    # ----- Raw Images
     def write_image(self, image):
+        # image.save_to_disk(f'/home/s0203301/project/images/{image.frame:08d}.png')
+
         array = np.frombuffer(image.raw_data, dtype=np.uint8)
+        array = array.reshape((image.height, image.width, 4))  # BGRA
+        array = array[:, :, :3]  # drop alpha
+        array = np.ascontiguousarray(array)
+
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.images.value, input_data=array)
         return
 
@@ -180,3 +194,26 @@ class CarlaWrapper:
 
     def read_image(self, index: int) -> np.ndarray:
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=index)
+
+    @property
+    def latest_image_index(self) -> int:
+        return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)
+
+    def read_latest_image(self) -> np.ndarray:
+        slot_index = self.latest_image_index -1
+        if slot_index == -1:
+            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.images.value].reserved_count - 1
+        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=slot_index)
+
+    # ----- Object Detected
+    def read_latest_object_detected(self) -> np.ndarray:
+        slot_index = self.latest_image_index -1
+        if slot_index == -1:
+            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.object_detected.value].reserved_count - 1
+        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_detected.value, slot_index=slot_index)
+
+    def write_object_detected(self, image: np.ndarray):
+        array = np.frombuffer(image, dtype=np.uint8)
+        array = np.ascontiguousarray(array)
+        self.shared_memory.write_data(shared_array_index=self.CarlaDataType.object_detected.value, input_data=array)
+        return
