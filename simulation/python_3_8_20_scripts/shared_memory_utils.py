@@ -212,8 +212,8 @@ class CarlaWrapper:
             slot_index = self.shared_memory.data_arrays[self.CarlaDataType.object_detected.value].reserved_count - 1
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_detected.value, slot_index=slot_index)
 
-    def write_object_detected(self, image):
-        array = np.frombuffer(image.raw_data, dtype=np.uint8)
+    def write_object_detected(self, image: np.ndarray):
+        array = np.frombuffer(image, dtype=np.uint8)
         array = np.ascontiguousarray(array)
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.object_detected.value, input_data=array)
         return
