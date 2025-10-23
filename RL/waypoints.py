@@ -3,53 +3,19 @@ import numpy as np
 import math
 import cv2
 import time
+import random
+
 from agents.navigation.global_route_planner import GlobalRoutePlanner
+from waypoints_utils import *
 
-# ===============================
-# Parameters
-# ===============================
-WAYPOINT_FRAME_SIZE = 15  # number of waypoints in the state vector
-SAMPLING_RESOLUTION = 2.0  # meters between global waypoints
-CARLA_HOST = 'localhost'
-CARLA_PORT = 2000  # make sure this matches your running CARLA server
 
-# ===============================
-# Helper functions
-# ===============================
-def get_ego_transform(vehicle):
-    """Returns ego vehicle position and yaw angle in radians."""
-    transform = vehicle.get_transform()
-    loc = transform.location
-    yaw = math.radians(transform.rotation.yaw)
-    return np.array([loc.x, loc.y, loc.z]), yaw
-
-def global_to_local(ego_pos, ego_yaw, waypoint_pos):
-    """Transforms a waypoint from global to ego-local coordinates."""
-    dx = waypoint_pos[0] - ego_pos[0]
-    dy = waypoint_pos[1] - ego_pos[1]
-    x_local = math.cos(-ego_yaw) * dx - math.sin(-ego_yaw) * dy
-    y_local = math.sin(-ego_yaw) * dx + math.cos(-ego_yaw) * dy
-    return np.array([x_local, y_local])
-
-def build_state_vector(ego_pos, ego_yaw, waypoints):
-    """Build a FIFO list of local waypoints for the agent."""
-    state = []
-    for wp in waypoints[:WAYPOINT_FRAME_SIZE]:
-        local_coords = global_to_local(ego_pos, ego_yaw, (wp.transform.location.x, wp.transform.location.y))
-        state.append(local_coords[0])  # only lateral info
-    while len(state) < WAYPOINT_FRAME_SIZE:
-        state.append(0.0)
-    return np.array(state, dtype=np.float32)
-
-# ===============================
 # Connect to CARLA
-# ===============================
-client = carla.Client(CARLA_HOST, CARLA_PORT)
+client = carla.Client('localhost', 2000)
 client.set_timeout(5.0)
 
 try:
     world = client.get_world()
-    print(f"Connected to CARLA on port {CARLA_PORT}")
+    print(f"Connected to CARLA on port {2000}")
 except Exception as e:
     raise RuntimeError("Cannot connect to CARLA. Make sure server is running.") from e
 
@@ -59,85 +25,121 @@ settings.synchronous_mode = True
 settings.fixed_delta_seconds = 0.05  # 20 FPS
 world.apply_settings(settings)
 
-# ===============================
 # Spawn ego vehicle
-# ===============================
 blueprint_library = world.get_blueprint_library()
-vehicle_bp = blueprint_library.filter("vehicle.tesla.model3")[0]
+ego_vehicle_bp = blueprint_library.filter("vehicle.tesla.model3")[0]
 spawn_points = world.get_map().get_spawn_points()
 
-vehicle = None
+ego_vehicle = None
 for sp in spawn_points:
     try:
-        vehicle = world.spawn_actor(vehicle_bp, sp)
+        ego_vehicle = world.spawn_actor(ego_vehicle_bp, sp)
         print("Vehicle spawned at:", sp)
         break
     except RuntimeError:
         continue
 
-if vehicle is None:
+if ego_vehicle is None:
     raise RuntimeError("No free spawn points available")
 
-# ===============================
+# Spawn vehicle in front (not working)
+spawn_transform = compute_safe_spawn_location_ahead(world, ego_vehicle, 20)
+
+front_vehicle_bp = random.choice(blueprint_library.filter('vehicle.*'))
+
+front_vehicle = world.try_spawn_actor(front_vehicle_bp, spawn_transform)
+
+if front_vehicle is None:
+    print("Failed to spawn front vehicle — try a different distance or location.")
+else:
+    print("Front vehicle spawned successfully!")
+
 # Attach camera to vehicle
-# ===============================
 camera_bp = blueprint_library.find('sensor.camera.rgb')
 camera_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
-camera = world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
+camera = world.spawn_actor(camera_bp, camera_transform, attach_to=ego_vehicle)
 
+# Define camera offset (behind and above the vehicle)
+distance_behind = 8.0
+height_above = 3.0
+
+# Define spectator
 spectator = world.get_spectator()
-
-vehicle_transform = vehicle.get_transform()
-spectator_transform = carla.Transform(
-    vehicle_transform.location + carla.Location(x=-8, z=5),
-    vehicle_transform.rotation
-)
+vehicle_transform = ego_vehicle.get_transform()
+spectator_transform = update_spectator(vehicle_transform, distance_behind, height_above)
 spectator.set_transform(spectator_transform)
 
-# ===============================
-# Setup Global Route Planner
-# ===============================
-planner = GlobalRoutePlanner(world.get_map(), sampling_resolution=SAMPLING_RESOLUTION)
+# Setup radar
+latest_distance_ahead = 50.0  # default max distance
 
+radar_bp = blueprint_library.find('sensor.other.radar')
+radar_bp.set_attribute('horizontal_fov', '30')
+radar_bp.set_attribute('vertical_fov', '5')
+radar_bp.set_attribute('range', '50')
+
+radar_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
+radar_sensor = world.spawn_actor(radar_bp, radar_transform, attach_to=ego_vehicle)
+
+def radar_callback(data):
+    global latest_distance_ahead
+    # Keep only objects roughly in front (±5° horizontal, ±2° vertical)
+    forward_detections = [d for d in data if abs(math.degrees(d.azimuth)) < 5 and abs(math.degrees(d.altitude)) < 2]
+    if forward_detections:
+        latest_distance_ahead = min(d.depth for d in forward_detections)
+    else:
+        latest_distance_ahead = 50.0  # max distance
+
+radar_sensor.listen(radar_callback)
+
+
+# Setup Global Route Planner
+planner = GlobalRoutePlanner(world.get_map(), sampling_resolution=SAMPLING_RESOLUTION)
 start_location = spawn_points[0].location
 end_location = spawn_points[-1].location
-
 route = planner.trace_route(start_location, end_location)
 waypoints = [wp for wp, _ in route]
 
-# ===============================
+# Enable autopilot
+ego_vehicle.set_autopilot(True)
+
 # Main Loop: compute state vector
-# ===============================
 try:
     while True:
         world.tick()
 
         # Update ego
-        ego_pos, ego_yaw = get_ego_transform(vehicle)
-
-        # Update spectator to follow vehicle
-        vehicle_transform = vehicle.get_transform()
-        spectator_transform = carla.Transform(
-            vehicle_transform.location + carla.Location(x=-8, z=5),
-            vehicle_transform.rotation
-        )
-        spectator.set_transform(spectator_transform)
+        ego_pos, ego_yaw = get_ego_transform(ego_vehicle)
 
         # Closest waypoint
         distances = [np.linalg.norm(np.array([wp.transform.location.x, wp.transform.location.y]) - ego_pos[:2])
                      for wp in waypoints]
         closest_idx = int(np.argmin(distances))
 
+        # Ego speed
+        velocity = ego_vehicle.get_velocity()
+        speed = math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2)
+
+        # Ego acceleration
+        acc = ego_vehicle.get_acceleration()
+        acceleration = math.sqrt(acc.x ** 2 + acc.y ** 2 + acc.z ** 2)
+
+        # Distance to car ahead
+        distance_to_front = latest_distance_ahead
+
         # State vector
         state_waypoints = waypoints[closest_idx:closest_idx + WAYPOINT_FRAME_SIZE]
         state_vector = build_state_vector(ego_pos, ego_yaw, state_waypoints)
-        print("State vector:", state_vector)
 
-        # Optional: autopilot
-        vehicle.set_autopilot(True)
+        # Combined state
+        state = np.concatenate([state_vector, [speed, acceleration, distance_to_front]], axis=0)
+        print("State:", state)
 
-        time.sleep(0.05)
+        # Update spectator to follow vehicle
+        vehicle_transform = ego_vehicle.get_transform()
+        spectator_transform = update_spectator(vehicle_transform, distance_behind, height_above)
+        spectator.set_transform(spectator_transform)
 
+        time.sleep(0.1)
 
 except KeyboardInterrupt:
     print("Exiting simulation.")
@@ -146,7 +148,9 @@ finally:
     # Cleanup
     camera.stop()
     camera.destroy()
-    if vehicle is not None:
-        vehicle.destroy()
+    radar_sensor.stop()
+    radar_sensor.destroy()
+    if ego_vehicle is not None:
+        ego_vehicle.destroy()
     cv2.destroyAllWindows()
     print("Actors destroyed, simulation ended.")
