@@ -181,9 +181,6 @@ class CarlaWrapper:
         array = array[:, :, :3]  # drop alpha
         array = np.ascontiguousarray(array)
 
-        plt.imshow(array)
-        plt.show()
-
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.images.value, input_data=array)
         return
 
