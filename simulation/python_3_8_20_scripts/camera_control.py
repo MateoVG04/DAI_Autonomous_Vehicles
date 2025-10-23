@@ -1,9 +1,6 @@
 import weakref
-from logging import getLogger
 
 import carla
-import numpy as np
-from carla import ColorConverter
 
 from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
@@ -58,6 +55,4 @@ class CameraManager:
         self = weak_self()
         if not self:
             return
-        logger = getLogger('camera')
         self.shared_memory.write_image(image=image)
-        logger.info("Saved Image")

@@ -160,10 +160,14 @@ class SharedMemoryManager:
 class CarlaWrapper:
     class CarlaDataType(IntEnum):
         images = 0
+        object_detected = 1
 
     def __init__(self, filename, image_width: int, image_height: int):
         data_arrays = [
-            SharedMemoryArray(data_shape=[image_width, image_height, 3],
+            SharedMemoryArray(data_shape=[image_height, image_width, 3], # Raw images
+                              reserved_count=100,
+                              datatype=np.uint8),
+            SharedMemoryArray(data_shape=[image_height, image_width, 3], # Object Detected images
                               reserved_count=100,
                               datatype=np.uint8),
         ]
@@ -173,6 +177,7 @@ class CarlaWrapper:
     def clear(self):
         self.shared_memory.clear()
 
+    # ----- Raw Images
     def write_image(self, image):
         # image.save_to_disk(f'/home/s0203301/project/images/{image.frame:08d}.png')
 
@@ -197,5 +202,18 @@ class CarlaWrapper:
     def read_latest_image(self) -> np.ndarray:
         slot_index = self.latest_image_index -1
         if slot_index == -1:
-            slot_index = self.shared_memory.data_arrays[0].reserved_count - 1
+            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.images.value].reserved_count - 1
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=slot_index)
+
+    # ----- Object Detected
+    def read_latest_object_detected(self) -> np.ndarray:
+        slot_index = self.latest_image_index -1
+        if slot_index == -1:
+            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.object_detected.value].reserved_count - 1
+        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_detected.value, slot_index=slot_index)
+
+    def write_object_detected(self, image: np.ndarray):
+        array = np.frombuffer(image, dtype=np.uint8)
+        array = np.ascontiguousarray(array)
+        self.shared_memory.write_data(shared_array_index=self.CarlaDataType.object_detected.value, input_data=array)
+        return
