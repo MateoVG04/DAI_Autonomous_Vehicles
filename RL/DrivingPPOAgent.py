@@ -16,6 +16,8 @@ from agents.tools.misc import compute_distance, get_speed
 
 import math
 
+from jupyter_notebooks.example_jupyter_notebook import world
+
 
 def save_metrics_to_csv(filename, metrics_dict):
     """Save metrics to a CSV file."""
@@ -35,7 +37,7 @@ def save_metrics_to_csv(filename, metrics_dict):
 
 class DrivingPPOAgent:
     def __init__(self, env, learning_rate=3e-4, clip_range=0.2,
-                 value_loss_coef=0.5, max_grad_norm=0.5):
+                 value_loss_coef=0.5, max_grad_norm=0.5, vehicle=None):
         self.device = torch.device("cpu")
 
         # TODO Still need to get the dimensions. These might change depending on what the computer vision does
@@ -43,6 +45,8 @@ class DrivingPPOAgent:
         self.out_steer_dim = ...
         self.in_speed_dim = ...
         self.out_speed_dim = ...
+
+        self.vehicle
 
         self.network = ActorCriticNetwork(input_steering_dim=self.in_steer_dim, output_steering_dim=self.out_steer_dim, input_speed_dim=self.in_speed_dim, output_speed_dim=self.out_speed_dim).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
@@ -238,11 +242,11 @@ def main():
 
     client.set_timeout(10.0)
     env = client.get_world()
-    player = setup_player(world=env)
+    vehicle = setup_player(world=env)
 
 
     # Initialize agent
-    agent = DrivingPPOAgent(env, learning_rate=3e-4)
+    agent = DrivingPPOAgent(env, learning_rate=3e-4, vehicle=vehicle)
 
     # Training metrics
     metrics = {
@@ -255,15 +259,13 @@ def main():
     for iteration in range(num_iterations):
         episode_data = []
         total_reward = 0
-
+        #TODO fix speed_sign
+        speed_signs = ...
+        images, current_speed, distance_to_vehicle, speed_signs, pedestrians, red_lights = world.get_state_info(player=vehicle,speed_signs=speed_signs)
         # Collect episodes with different initial conditions
         for episode in range(num_episodes_per_update):
-            # Optionally modify initial conditions here
-            env.ship_pos = [2060.0 + np.random.uniform(-1, 1),
-                            -50.0 + np.random.uniform(-1, 1)]
-
             # Run episode
-            episode_result = run_episode(env, agent)
+            episode_result = run_episode(env, agent, vehicle, images, distance_to_vehicle, speed_signs, pedestrians, red_lights)
             episode_data.append(episode_result)
             total_reward += episode_result['episode_reward']
 
@@ -330,11 +332,9 @@ def evaluate_trained_agent(checkpoint_path, num_episodes=3):
     client_version = client.get_client_version()
 
     client.set_timeout(10.0)
-    env = client.get_world()
-
     world = CarlaEnv(client=client)
 
-    logger, end_simulation, world, tracer, agent, distance_hist, speed_hist, loop_count, player = world.do_carla_setup()
+    logger, end_simulation, env, tracer, agent, distance_hist, speed_hist, loop_count, player = world.do_carla_setup()
 
     agent = DrivingPPOAgent(env)
     checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'))
@@ -350,13 +350,8 @@ def evaluate_trained_agent(checkpoint_path, num_episodes=3):
     for episode in range(num_episodes):
         state, _ = env.reset()
         # TODO fix the input data (the state)
-        images = ...
-        current_speed = get_speed(player)
-        distance_to_vehicle = ...
-        if speed_signs is None:
-            speed_signs = player.get_speed_signs()
-        pedestrians = ...
-        red_lights = ...
+        speed_signs = ...
+        images, current_speed, distance_to_vehicle, speed_signs, pedestrians, red_lights = world.get_state_info(player, speed_signs)
 
         world.reset()
         episode_reward = 0
@@ -366,7 +361,7 @@ def evaluate_trained_agent(checkpoint_path, num_episodes=3):
         while not done:
             action, _ = agent.select_action(images, current_speed, distance_to_vehicle, speed_signs, pedestrians, red_lights)
 
-            next_state, reward, terminated, truncated, _ = env.step(action)
+            next_state, reward, terminated, truncated, _ = world.step(action)
             done = terminated or truncated
             images, current_speed, distance_to_vehicle, speed_signs, pedestrians, red_lights = next_state
             episode_reward += reward
