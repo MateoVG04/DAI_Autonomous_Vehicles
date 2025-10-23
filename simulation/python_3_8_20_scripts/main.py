@@ -169,7 +169,7 @@ def record_agent_state(world, vehicle, agent, logger, distance_hist, speed_hist)
     distance_hist.record(dist, attributes=attrs)
     speed_hist.record(speed, attributes=attrs)
 
-    # logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
+    logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
 
 # ==============================================================================
 # -- Agent() --------------------------------------------------------------
@@ -235,73 +235,72 @@ def main():
     set_random_destination(world, agent)
 
     logger.info("Starting simulation")
-    while not end_simulation:
-        with tracer.start_as_current_span("drive_to_destination") as drive_span:
-            drive_span.set_attribute("destination.distance", 0) # fixme
-            drive_span.set_attribute("loop.count_start", loop_count)
-            while not agent.done():
-                ts = world.get_snapshot().timestamp
-
-                with tracer.start_as_current_span(
-                        "control_loop",
-                        attributes={
-                            "simulation.frame": ts.frame,
-                            "simulation.elapsed_seconds": ts.elapsed_seconds,
-                        }
-                ) as loop_span:
-                    record_agent_state(
-                        world=world,
-                        vehicle=agent._vehicle,
-                        agent=agent,
-                        logger=logger,
-                        distance_hist=distance_hist,
-                        speed_hist=speed_hist,
-                    )
-                    world.tick()  # synchronous mode
-
-                    control = agent.run_step()
-                    control.manual_gear_shift = False
-                    vehicle.apply_control(control)
-
-            # Trip done
-            drive_span.set_status(Status(StatusCode.OK))
-            logger.info("Destination reached")
-            logger.info(f"Image index {shared_memory.latest_image_index}")
-
-            loop_count -= 1
-            if not loop_count or loop_count == 0:
-                end_simulation = True
-                break
-            set_random_destination(world, agent)
-
-    # -----
-    # Cleaning up
-    # -----
-    logger.info(f"Current index for image buffer {shared_memory.latest_image_index}")
-
-    logger.info("Closing down ..")
     try:
-        for sensor in camera.sensors:
-            sensor.stop()
-            sensor.destroy()
-    except Exception as e:
-        logger.warning(e)
-    try:
-        vehicle.stop()
-        vehicle.destroy()
-    except Exception as e:
-        logger.warning(e)
-    logger.info("Exitting ..")
+        while not end_simulation:
+            with tracer.start_as_current_span("drive_to_destination") as drive_span:
+                drive_span.set_attribute("destination.distance", 0) # fixme
+                drive_span.set_attribute("loop.count_start", loop_count)
+                while not agent.done():
+                    ts = world.get_snapshot().timestamp
 
-    latest_image = shared_memory.read_latest_image()
-    plt.imshow(latest_image)
-    plt.axis("off")
-    plt.show()
+                    with tracer.start_as_current_span(
+                            "control_loop",
+                            attributes={
+                                "simulation.frame": ts.frame,
+                                "simulation.elapsed_seconds": ts.elapsed_seconds,
+                            }
+                    ) as loop_span:
+                        if ts.frame % 10 == 0:
+                            record_agent_state(
+                                world=world,
+                                vehicle=agent._vehicle,
+                                agent=agent,
+                                logger=logger,
+                                distance_hist=distance_hist,
+                                speed_hist=speed_hist,
+                            )
+                        world.tick()  # synchronous mode
+
+                        control = agent.run_step()
+                        control.manual_gear_shift = False
+                        vehicle.apply_control(control)
+
+                # Trip done
+                drive_span.set_status(Status(StatusCode.OK))
+                logger.info("Destination reached")
+                logger.info(f"Image index {shared_memory.latest_image_index}")
+
+                loop_count -= 1
+                if not loop_count or loop_count == 0:
+                    end_simulation = True
+                    break
+                set_random_destination(world, agent)
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt")
+    finally:
+        # -----
+        # Cleaning up
+        # -----
+        logger.info(f"Current index for image buffer {shared_memory.latest_image_index}")
+
+        logger.info("Closing down ..")
+        try:
+            for sensor in camera.sensors:
+                sensor.stop()
+                sensor.destroy()
+        except Exception as e:
+            logger.warning(e)
+        try:
+            vehicle.stop()
+            vehicle.destroy()
+        except Exception as e:
+            logger.warning(e)
+        logger.info("Exitting ..")
 
 if __name__ == '__main__':
     main()
-    camera_width = 600
-    camera_height = 800
+    camera_width = 800
+    camera_height = 600
     shared_memory_filepath = "/dev/shm/carla_shared.dat"
     shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width, image_height=camera_height)
     latest_image = shared_memory.read_latest_image()
