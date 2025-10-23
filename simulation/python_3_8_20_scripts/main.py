@@ -2,6 +2,7 @@ import logging
 import random
 import sys
 import math
+from matplotlib import pyplot as plt
 
 from opentelemetry import trace, metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -168,7 +169,7 @@ def record_agent_state(world, vehicle, agent, logger, distance_hist, speed_hist)
     distance_hist.record(dist, attributes=attrs)
     speed_hist.record(speed, attributes=attrs)
 
-    logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
+    # logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
 
 # ==============================================================================
 # -- Agent() --------------------------------------------------------------
@@ -215,13 +216,14 @@ def main():
     world.tick()  # fixme test if this is required
 
     logger.info("Setting up cameras")
-    camera = CameraManager(parent_actor=vehicle,
-                           camera_width=(camera_width := 640),
-                           camera_height=(camera_height := 640),
-                           shared_memory_filepath=(shared_memory_filepath := "/dev/shm/carla_shared.dat"))
-    camera.set_sensor(1)  # rbg (fixme)
-
+    camera_width = 800
+    camera_height = 600
+    shared_memory_filepath = "/dev/shm/carla_shared.dat"
     shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width, image_height=camera_height)
+    camera = CameraManager(client=carla_client, world=world, parent_actor=vehicle,
+                           camera_width=camera_width,
+                           camera_height=camera_height,
+                           shared_memory_filepath=shared_memory_filepath)
 
     # 3) Agent
     logger.info("Setting up agent")
@@ -275,20 +277,33 @@ def main():
     # -----
     # Cleaning up
     # -----
-    logger.info(f"Current index for image buffer {shared_memory}")
+    logger.info(f"Current index for image buffer {shared_memory.latest_image_index}")
 
     logger.info("Closing down ..")
     try:
-        camera.sensor.destroy()
         for sensor in camera.sensors:
+            sensor.stop()
             sensor.destroy()
     except Exception as e:
         logger.warning(e)
     try:
+        vehicle.stop()
         vehicle.destroy()
     except Exception as e:
         logger.warning(e)
     logger.info("Exitting ..")
 
+    latest_image = shared_memory.read_latest_image()
+    plt.imshow(latest_image)
+    plt.axis("off")
+    plt.show()
+
 if __name__ == '__main__':
     main()
+    camera_width = 600
+    camera_height = 800
+    shared_memory_filepath = "/dev/shm/carla_shared.dat"
+    shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width, image_height=camera_height)
+    latest_image = shared_memory.read_latest_image()
+    plt.imshow(latest_image[:, :, ::-1])
+    plt.show()
