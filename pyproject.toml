@@ -8,6 +8,7 @@ dependencies = [
     "opentelemetry-sdk",
     "opentelemetry-exporter-otlp-proto-grpc",
     "opentelemetry-instrumentation-logging",
+    "matplotlib",
 ]
 
 [tool.black]
