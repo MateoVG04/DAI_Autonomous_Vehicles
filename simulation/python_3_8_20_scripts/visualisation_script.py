@@ -26,8 +26,8 @@ def generate_frames():
 def generate_frames_detected():
     while True:
         # Replace this with your simulation output
-        camera_width = 600
-        camera_height = 800
+        camera_width = 800
+        camera_height = 600
         shared_memory_filepath = "/dev/shm/carla_shared.dat"
         shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width,
                                      image_height=camera_height)
@@ -42,7 +42,7 @@ def generate_frames_detected():
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
 @app.route('/object_detected')
-def video_feed():
+def video_feed_object():
     return Response(generate_frames_detected(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 

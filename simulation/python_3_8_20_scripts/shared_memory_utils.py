@@ -58,8 +58,7 @@ class SharedMemoryManager:
         # ----- Creating binds for use in this class
         # Making sure the file already exists
         path = Path(filename)
-        if not os.path.exists(path):
-            self.init_file(path)
+        self.init_file(path)
 
         # ---- Helper views
         # Main memory
@@ -97,10 +96,17 @@ class SharedMemoryManager:
             pass
 
     def init_file(self, filepath: Path):
-        with open(filepath, "wb") as f:
-            f.write(b"\x00" * self.total_size)
-            os.chmod(filepath, 0o666)
+        if not os.path.exists(filepath):
+            with open(filepath, "wb") as f:
+                f.write(b"\x00" * self.total_size)
+                os.chmod(filepath, 0o666)
+            return
 
+        # Checking if size is correct
+        with open(filepath, "ab") as f:  # append mode
+            current_size = os.path.getsize(filepath)
+            if self.total_size > current_size:
+                f.write(b"\x00" * (self.total_size - current_size))
     # -----
     # write_index operations
     # -----
