@@ -22,21 +22,46 @@ def global_to_local(ego_pos, ego_yaw, waypoint_pos):
     """Transforms a waypoint from global to ego-local coordinates."""
     dx = waypoint_pos[0] - ego_pos[0]
     dy = waypoint_pos[1] - ego_pos[1]
-    x_local = math.cos(-ego_yaw) * dx - math.sin(-ego_yaw) * dy
-    y_local = math.sin(-ego_yaw) * dx + math.cos(-ego_yaw) * dy
+    x_local = np.cos(-ego_yaw) * dx - np.sin(-ego_yaw) * dy
+    y_local = np.sin(-ego_yaw) * dx + np.cos(-ego_yaw) * dy
     return np.array([x_local, y_local])
 
-def build_state_vector(ego_pos, ego_yaw, waypoints):
-    state = []
-    for wp in waypoints[:WAYPOINT_FRAME_SIZE]:
-        local_coords = global_to_local(
-            ego_pos, ego_yaw,
-            (wp.transform.location.x, wp.transform.location.y)
-        )
-        state.extend(local_coords)  # (x, y)
-    while len(state) < 2 * WAYPOINT_FRAME_SIZE:
-        state.extend([0.0, 0.0])
-    return np.array(state, dtype=np.float32)
+def build_state_vector(ego_pos, ego_yaw, waypoints, frame_size, lane_width, speed, accel, dist):
+    """
+    Build a state vector for DRL input using only y-values of waypoints ahead.
+
+    Args:
+        ego_pos: np.array([x, y, z]) ego vehicle global position
+        ego_yaw: float, ego vehicle yaw in radians
+        waypoints: list of CARLA waypoints (global positions)
+        frame_size: int, number of future waypoints to include
+        lane_width: float, width of the lane for normalization
+        speed: float, current speed of the vehicle
+        accel: float, current acceleration of the vehicle
+        dist: float, distance between waypoints
+
+    Returns:
+        np.ndarray of shape (frame_size,), only y-values
+    """
+    max_offset = lane_width / 2
+    distances = [np.linalg.norm(np.array([wp.transform.location.x, wp.transform.location.y]) - ego_pos[:2])
+                 for wp in waypoints]
+    closest_idx = int(np.argmin(distances))
+    future_waypoints = waypoints[closest_idx : closest_idx + frame_size]
+    y_local_list = []
+    for wp in future_waypoints:
+        local_coords = global_to_local(ego_pos, ego_yaw,
+                                       (wp.transform.location.x, wp.transform.location.y))
+        y_norm = np.clip(local_coords[1] / max_offset, -1, 1)
+        y_local_list.append(y_norm)
+    while len(y_local_list) < frame_size:
+        y_local_list.append(0.0)
+    speed_norm = np.clip(speed / 30.0, 0, 1)
+    accel_norm = np.clip(accel / 5.0, -1, 1)
+    dist_norm = np.clip(dist / 50.0, 0, 1)
+    y_local_list.extend([speed_norm, accel_norm, dist_norm])
+    return np.array(y_local_list, dtype=np.float32)
+
 
 def compute_safe_spawn_location_ahead(world, ego_vehicle, distance_ahead):
     ego_transform = ego_vehicle.get_transform()
@@ -102,60 +127,3 @@ def get_distance_to_lead_vehicle(world, ego_vehicle, max_distance):
         return min_distance
     else:
         return max_distance  # no vehicle ahead
-
-import carla
-import math
-import numpy as np
-
-class LeadVehicleRadar:
-    def __init__(self, world, ego_vehicle, forward_distance=50.0, fov_horizontal=30, fov_vertical=5, z_offset=1.0, x_offset=2.5):
-        """
-        world: CARLA world object
-        ego_vehicle: your ego vehicle actor
-        forward_distance: max radar range (meters)
-        fov_horizontal: horizontal field of view (degrees)
-        fov_vertical: vertical field of view (degrees)
-        z_offset: height above ego vehicle for sensor
-        x_offset: forward offset from ego vehicle for sensor
-        """
-        self.ego_vehicle = ego_vehicle
-        self.world = world
-        self.forward_distance = forward_distance
-        self.latest_distance = forward_distance
-
-        # Create radar blueprint
-        bp = world.get_blueprint_library().find('sensor.other.radar')
-        bp.set_attribute('horizontal_fov', str(fov_horizontal))
-        bp.set_attribute('vertical_fov', str(fov_vertical))
-        bp.set_attribute('range', str(forward_distance))
-
-        # Attach radar in front of vehicle
-        transform = carla.Transform(carla.Location(x=x_offset, z=z_offset))
-        self.sensor = world.spawn_actor(bp, transform, attach_to=ego_vehicle)
-
-        # Register callback
-        self.sensor.listen(self._radar_callback)
-
-    def _radar_callback(self, radar_data):
-        """Process radar detections and find closest object ahead"""
-        # Filter points roughly in front
-        forward_detections = [
-            d for d in radar_data
-            if abs(math.degrees(d.azimuth)) < 5 and abs(math.degrees(d.altitude)) < 2
-        ]
-        if forward_detections:
-            distances = [d.depth for d in forward_detections]
-            self.latest_distance = min(distances)
-        else:
-            self.latest_distance = self.forward_distance
-
-    def get_distance(self):
-        """Returns the latest distance to lead vehicle (meters)"""
-        return self.latest_distance
-
-    def destroy(self):
-        """Cleanup the sensor"""
-        if self.sensor is not None:
-            self.sensor.stop()
-            self.sensor.destroy()
-            self.sensor = None
