@@ -58,8 +58,7 @@ class SharedMemoryManager:
         # ----- Creating binds for use in this class
         # Making sure the file already exists
         path = Path(filename)
-        if not os.path.exists(path):
-            self.init_file(path)
+        self.init_file(path)
 
         # ---- Helper views
         # Main memory
@@ -97,10 +96,17 @@ class SharedMemoryManager:
             pass
 
     def init_file(self, filepath: Path):
-        with open(filepath, "wb") as f:
-            f.write(b"\x00" * self.total_size)
-            os.chmod(filepath, 0o666)
+        if not os.path.exists(filepath):
+            with open(filepath, "wb") as f:
+                f.write(b"\x00" * self.total_size)
+                os.chmod(filepath, 0o666)
+            return
 
+        # Checking if size is correct
+        with open(filepath, "ab") as f:  # append mode
+            current_size = os.path.getsize(filepath)
+            if self.total_size > current_size:
+                f.write(b"\x00" * (self.total_size - current_size))
     # -----
     # write_index operations
     # -----
@@ -161,6 +167,7 @@ class CarlaWrapper:
     class CarlaDataType(IntEnum):
         images = 0
         object_detected = 1
+        waypoint = 3
 
     def __init__(self, filename, image_width: int, image_height: int):
         data_arrays = [
@@ -170,6 +177,9 @@ class CarlaWrapper:
             SharedMemoryArray(data_shape=[image_height, image_width, 3], # Object Detected images
                               reserved_count=100,
                               datatype=np.uint8),
+            SharedMemoryArray(data_shape=[33], # 33 for now
+                                reserved_count=100,
+                                datatype=np.float64),
         ]
         self.shared_memory = SharedMemoryManager(filename=filename,
                                                  data_arrays=data_arrays)
@@ -217,3 +227,13 @@ class CarlaWrapper:
         array = np.ascontiguousarray(array)
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.object_detected.value, input_data=array)
         return
+
+    # ----- Waypoints
+    def write_waypoint(self, waypoint: np.ndarray):
+        array = np.frombuffer(waypoint, dtype=np.float64)
+        array = np.ascontiguousarray(array)
+        self.shared_memory.write_data(shared_array_index=self.CarlaDataType.waypoint.value, input_data=array)
+        return
+
+    def read_waypoints(self) -> np.ndarray:
+        return self.shared_memory.read_data_array(shared_array_index=self.CarlaDataType.waypoint.value)

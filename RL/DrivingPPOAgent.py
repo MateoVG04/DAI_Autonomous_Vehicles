@@ -16,9 +16,6 @@ from agents.tools.misc import compute_distance, get_speed
 
 import math
 
-from jupyter_notebooks.example_jupyter_notebook import world
-
-
 def save_metrics_to_csv(filename, metrics_dict):
     """Save metrics to a CSV file."""
     # Create directory if it doesn't exist
@@ -243,7 +240,7 @@ def main():
     client.set_timeout(10.0)
     env = client.get_world()
     vehicle = setup_player(world=env)
-
+    world = CarlaEnv(client=client)
 
     # Initialize agent
     agent = DrivingPPOAgent(env, learning_rate=3e-4, vehicle=vehicle)
