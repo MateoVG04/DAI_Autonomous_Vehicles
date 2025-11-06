@@ -299,10 +299,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    camera_width = 800
-    camera_height = 600
-    shared_memory_filepath = "/dev/shm/carla_shared.dat"
-    shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width, image_height=camera_height)
-    latest_image = shared_memory.read_latest_image()
-    plt.imshow(latest_image[:, :, ::-1])
-    plt.show()
