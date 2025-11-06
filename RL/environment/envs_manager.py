@@ -5,11 +5,16 @@ import numpy as np
 import torch
 from gym.spaces.box import Box
 
-from vec_env import VecEnvWrapper
-from vec_env.subproc_vec_env import SubprocVecEnv
-from vec_env.dummy_vec_env import DummyVecEnv
-from vec_env.vec_normalize import VecNormalize
-from vec_env.util import dict_to_obs, obs_to_dict
+from RL.openai_baseline.vec_env import DummyVecEnv
+from RL.openai_baseline.vec_env.vec_normalize import VecNormalize
+from RL.openai_baseline.vec_env import VecEnvWrapper
+from RL.openai_baseline.vec_env import SubprocVecEnv
+from RL.openai_baseline.vec_env.util import dict_to_obs, obs_to_dict
+#from vec_env import VecEnvWrapper
+#from vec_env.subproc_vec_env import SubprocVecEnv
+#from vec_env.dummy_vec_env import DummyVecEnv
+#from vec_env.vec_normalize import VecNormalize
+#from vec_env.util import dict_to_obs, obs_to_dict
 
 from env import CarlaEnv
 
