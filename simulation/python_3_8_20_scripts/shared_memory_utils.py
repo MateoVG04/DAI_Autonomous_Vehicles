@@ -216,6 +216,10 @@ class CarlaWrapper:
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=slot_index)
 
     # ----- Object Detected
+    @property
+    def object_detected_index(self) -> int:
+        return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.object_detected.value)
+
     def read_latest_object_detected(self) -> np.ndarray:
         slot_index = self.latest_image_index -1
         if slot_index == -1:
