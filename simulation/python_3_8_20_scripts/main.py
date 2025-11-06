@@ -2,6 +2,8 @@ import logging
 import random
 import sys
 import math
+
+import Pyro4
 from matplotlib import pyplot as plt
 
 from opentelemetry import trace, metrics
@@ -205,6 +207,10 @@ def main():
     setup_carla(logger=logger, client=carla_client)
     logger.info("Carla Client started setup finished")
 
+    # Pyro
+    uri = "PYRO:simulation.controller@localhost:40589"
+    controller = Pyro4.Proxy(uri)
+
     # -----
     # Starting the control loop
     # -----
@@ -232,11 +238,17 @@ def main():
 
     # 4) Simulation
     end_simulation = False
-    set_random_destination(world, agent)
 
     logger.info("Starting simulation")
     try:
         while not end_simulation:
+            # Checking for start signal
+            if not controller.should_run():
+                continue
+            controller.mark_running()
+            set_random_destination(world, agent)
+
+            # Performing full run
             with tracer.start_as_current_span("drive_to_destination") as drive_span:
                 drive_span.set_attribute("destination.distance", 0) # fixme
                 drive_span.set_attribute("loop.count_start", loop_count)
@@ -269,12 +281,8 @@ def main():
                 drive_span.set_status(Status(StatusCode.OK))
                 logger.info("Destination reached")
                 logger.info(f"Image index {shared_memory.latest_image_index}")
+                controller.mark_finished()
 
-                loop_count -= 1
-                if not loop_count or loop_count == 0:
-                    end_simulation = True
-                    break
-                set_random_destination(world, agent)
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt")
     finally:
