@@ -67,15 +67,6 @@ vehicle = setup_vehicle(world)
 
 agent = BasicAgent(vehicle=vehicle, target_speed=30)
 
-
-# Spawn vehicle in front (not working)
-spawn_transform = compute_safe_spawn_location_ahead(world, vehicle, 20)
-
-# Attach camera to vehicle
-camera_bp = world.get_blueprint_library().find('sensor.camera.rgb')
-camera_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
-camera = world.spawn_actor(camera_bp, camera_transform, attach_to=vehicle)
-
 # Define camera offset (behind and above the vehicle)
 distance_behind = 8.0
 height_above = 3.0
@@ -163,8 +154,6 @@ except KeyboardInterrupt:
 
 finally:
     # Cleanup
-    camera.stop()
-    camera.destroy()
     radar_sensor.stop()
     radar_sensor.destroy()
     if vehicle is not None:
