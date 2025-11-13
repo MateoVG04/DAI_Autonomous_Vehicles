@@ -53,7 +53,7 @@ class LocalPlanner(object):
             max_brake: maximum brake applied to the vehicle
             max_steering: maximum steering applied to the vehicle
             offset: distance between the route waypoints and the center of the lane
-        :param map_inst: carla.Map instance to avoid the expensive call of getting it.
+        :param map_inst: carla_env.Map instance to avoid the expensive call of getting it.
         """
         self._vehicle = vehicle
         self._world = self._vehicle.get_world()
@@ -61,7 +61,7 @@ class LocalPlanner(object):
             if isinstance(map_inst, carla.Map):
                 self._map = map_inst
             else:
-                print("Warning: Ignoring the given map as it is not a 'carla.Map'")
+                print("Warning: Ignoring the given map as it is not a 'carla_env.Map'")
                 self._map = self._world.get_map()
         else:
             self._map = self._world.get_map()
@@ -191,11 +191,11 @@ class LocalPlanner(object):
 
     def set_global_plan(self, current_plan, stop_waypoint_creation=True, clean_queue=True):
         """
-        Adds a new plan to the local planner. A plan must be a list of [carla.Waypoint, RoadOption] pairs
+        Adds a new plan to the local planner. A plan must be a list of [carla_env.Waypoint, RoadOption] pairs
         The 'clean_queue` parameter erases the previous plan if True, otherwise, it adds it to the old one
         The 'stop_waypoint_creation' flag stops the automatic creation of random waypoints
 
-        :param current_plan: list of (carla.Waypoint, RoadOption)
+        :param current_plan: list of (carla_env.Waypoint, RoadOption)
         :param stop_waypoint_creation: bool
         :param clean_queue: bool
         :return:

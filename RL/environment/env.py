@@ -4,19 +4,21 @@ import cv2
 import skvideo.io
 import numpy as np
 
-import rewards
+import RL.environment.rewards as rewards
 
-import experiment_suites
-import carla_env.driving_benchmark.experiment_suites as experiment_suites_benchmark
-from carla_env.client import VehicleControl
-from carla_env.planner.planner import Planner
-from carla_env.settings import CarlaSettings
-from carla_env.client import CarlaClient
-from carla_env.tcp import TCPConnectionError
-from observation_utils import CameraException
-import gym
+import RL.environment.experiment_suites as experiment_suites
+import RL.environment.carla_env.driving_benchmark.experiment_suites as experiment_suites_benchmark
+from RL.environment.carla_env.client import VehicleControl
+from RL.environment.carla_env.planner.planner import Planner
+from RL.environment.carla_env.settings import CarlaSettings
+from RL.environment.carla_env.client import CarlaClient
+from RL.environment.carla_env.tcp import TCPConnectionError
+#from observation_utils import CameraException
+import gymnasium as gym
 
-from carla_logger import get_carla_logger
+from RL.environment.carla_logger import get_carla_logger
+from RL.environment.observation_utils import CameraException
+#from carla_logger import get_carla_logger
 # TODO: Remove this before open-sourcing environment
 
 class CarlaEnv(object):

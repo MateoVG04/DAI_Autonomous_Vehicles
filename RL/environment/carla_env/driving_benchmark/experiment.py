@@ -3,8 +3,10 @@
 #
 # This work is licensed under the terms of the MIT license.
 # For a copy, see <https://opensource.org/licenses/MIT>.
+from RL.environment.carla_env.settings import CarlaSettings
 
-from carla.settings import CarlaSettings
+
+#from carla.settings import CarlaSettings
 
 
 class Experiment(object):

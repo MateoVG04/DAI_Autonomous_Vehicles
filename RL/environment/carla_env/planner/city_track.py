@@ -3,11 +3,16 @@
 #
 # This work is licensed under the terms of the MIT license.
 # For a copy, see <https://opensource.org/licenses/MIT>.
+#from RL.environment.carla_env.driving_benchmark.driving_benchmark import sldist
+from RL.environment.carla_env.planner.astar import AStar
+from RL.environment.carla_env.planner.map import CarlaMap
+from RL.environment.carla_env.utils.geo import sldist
 
-from carla.planner.graph import sldist
 
-from carla.planner.astar import AStar
-from carla.planner.map import CarlaMap
+#from carla.planner.graph import sldist
+
+#from carla.planner.astar import AStar
+#from carla.planner.map import CarlaMap
 
 
 class CityTrack(object):

@@ -1,9 +1,9 @@
 import os
 
-import gym
+import gymnasium as gym
 import numpy as np
 import torch
-from gym.spaces.box import Box
+from gymnasium.spaces.box import Box
 
 from RL.openai_baseline.vec_env import DummyVecEnv
 from RL.openai_baseline.vec_env.vec_normalize import VecNormalize
@@ -11,7 +11,7 @@ from RL.openai_baseline.vec_env import VecEnvWrapper
 from RL.openai_baseline.vec_env import SubprocVecEnv
 from RL.openai_baseline.vec_env.util import dict_to_obs, obs_to_dict
 
-from env import CarlaEnv
+from RL.environment.env import CarlaEnv
 
 def make_env(obs_converter, action_converter, port, id, seed, subset,
              video_every, video_dir, reward_class_name, experiment_suite, benchmark, city_name):

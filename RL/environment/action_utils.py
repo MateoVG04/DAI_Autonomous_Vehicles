@@ -1,7 +1,7 @@
 
-import gym
+import gymnasium as gym
 import numpy as np
-from carla_env.client import VehicleControl
+from RL.environment.carla_env.client import VehicleControl
 
 
 class CarlaActionsConverter(object):

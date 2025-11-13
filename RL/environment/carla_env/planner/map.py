@@ -9,6 +9,15 @@
 import math
 import os
 
+from RL.environment.carla_env.planner.converter import Converter
+from RL.environment.carla_env.planner.graph import Graph
+from RL.environment.carla_env.planner.grid import Grid
+from RL.environment.carla_env.utils.geo import sldist
+#from carla.planner.graph import Graph
+#from carla.planner.graph import sldist
+#from carla.planner.grid import Grid
+#from carla.planner.converter import Converter
+
 try:
     import numpy as np
 except ImportError:
@@ -18,12 +27,6 @@ try:
     from PIL import Image
 except ImportError:
     raise RuntimeError('cannot import PIL, make sure pillow package is installed')
-
-from carla.planner.graph import Graph
-from carla.planner.graph import sldist
-from carla.planner.grid import Grid
-from carla.planner.converter import Converter
-
 
 def color_to_angle(color):
     return (float(color) / 255.0) * 2 * math.pi

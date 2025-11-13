@@ -19,7 +19,7 @@ Controls:
 """
 
 # ==============================================================================
-# -- find carla module ---------------------------------------------------------
+# -- find carla_env module ---------------------------------------------------------
 # ==============================================================================
 
 
@@ -28,7 +28,7 @@ import os
 import sys
 
 try:
-    sys.path.append(glob.glob('../carla/dist/carla-*%d.%d-%s.egg' % (
+    sys.path.append(glob.glob('../carla_env/dist/carla_env-*%d.%d-%s.egg' % (
         sys.version_info.major,
         sys.version_info.minor,
         'win-amd64' if os.name == 'nt' else 'linux-x86_64'))[0])
@@ -81,7 +81,7 @@ class ClientSideBoundingBoxes(object):
     @staticmethod
     def get_bounding_boxes(vehicles, camera):
         """
-        Creates 3D bounding boxes based on carla vehicle list and camera.
+        Creates 3D bounding boxes based on carla_env vehicle list and camera.
         """
 
         bounding_boxes = [ClientSideBoundingBoxes.get_bounding_box(vehicle, camera) for vehicle in vehicles]
@@ -186,7 +186,7 @@ class ClientSideBoundingBoxes(object):
     @staticmethod
     def get_matrix(transform):
         """
-        Creates matrix from carla transform.
+        Creates matrix from carla_env transform.
         """
 
         rotation = transform.rotation

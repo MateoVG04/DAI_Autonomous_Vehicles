@@ -8,10 +8,16 @@
 
 from __future__ import print_function
 
-from carla.driving_benchmark.experiment import Experiment
-from carla.sensor import Camera
-from carla.settings import CarlaSettings
-from carla.driving_benchmark.experiment_suites.experiment_suite import ExperimentSuite
+from RL.environment.carla_env.driving_benchmark.experiment import Experiment
+from RL.environment.carla_env.driving_benchmark.experiment_suites.experiment_suite import ExperimentSuite
+from RL.environment.carla_env.sensor import Camera
+from RL.environment.carla_env.settings import CarlaSettings
+
+
+#from carla.driving_benchmark.experiment import Experiment
+#from carla.sensor import Camera
+#from carla.settings import CarlaSettings
+#from carla.driving_benchmark.experiment_suites.experiment_suite import ExperimentSuite
 
 
 class CoRL2017(ExperimentSuite):

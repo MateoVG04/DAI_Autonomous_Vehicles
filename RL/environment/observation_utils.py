@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-import gym
+import gymnasium as gym
 
 class CameraException(Exception):
 

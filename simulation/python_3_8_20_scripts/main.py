@@ -36,7 +36,7 @@ def setup_telemetry(address: str, port: int, send_to_otlp: bool = True, log_to_c
     insecure = "https://" not in endpoint
 
     # Create a resource
-    resource = Resource.create(attributes={"service.name": "carla-simulation"})
+    resource = Resource.create(attributes={"service.name": "carla_env-simulation"})
 
     # -----
     # Setting up tracing
@@ -222,7 +222,7 @@ def main():
     meter = metrics.get_meter(__name__)
     distance_hist, speed_hist = setup_vehicle_metrics(meter=meter)
 
-    logger.info("carla.Client setup started")
+    logger.info("carla_env.Client setup started")
     carla_client = carla.Client('localhost', 2000)
     setup_carla(logger=logger, client=carla_client)
     logger.info("Carla Client started setup finished")

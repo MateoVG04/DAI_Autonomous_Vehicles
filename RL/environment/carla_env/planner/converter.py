@@ -7,7 +7,9 @@
 import math
 import numpy as np
 
-from carla.planner.graph import string_to_floats
+from RL.environment.carla_env.planner.graph import string_to_floats
+
+#from carla.planner.graph import string_to_floats
 
 # Constant definition enumeration
 

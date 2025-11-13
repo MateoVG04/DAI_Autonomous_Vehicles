@@ -1,5 +1,6 @@
+from stable_baselines3.common.monitor import ResultsWriter
+
 from . import VecEnvWrapper
-from baselines.bench.monitor import ResultsWriter
 import numpy as np
 import time
 from collections import deque

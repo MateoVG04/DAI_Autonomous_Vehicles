@@ -155,7 +155,7 @@ def main():
                                 # Save the synchronized pair to the local _out directory
                                 rgb_img.save_to_disk(f'/test/rgb/{rgb_img.frame:06d}.png')
                                 #sem_img.save_to_disk(f'/out/semantic/{sem_img.frame:06d}.png',
-                                                     #carla.ColorConverter.CityScapesPalette)
+                                                     #carla_env.ColorConverter.CityScapesPalette)
 
                                 # Only increment the counter AFTER a successful save
                                 frames_collected += 1

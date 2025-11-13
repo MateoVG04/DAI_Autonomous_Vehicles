@@ -10,19 +10,18 @@ import logging
 import math
 import time
 
-from carla.client import VehicleControl
-from carla.client import make_carla_client
-from carla.driving_benchmark.metrics import Metrics
-from carla.planner.planner import Planner
-from carla.settings import CarlaSettings
-from carla.tcp import TCPConnectionError
-
 from . import results_printer
+from .metrics import Metrics
 from .recording import Recording
+from ..client import VehicleControl, make_carla_client
+from ..planner.planner import Planner
+from ..settings import CarlaSettings
+from ..tcp import TCPConnectionError
+from ..utils.geo import sldist
 
 
-def sldist(c1, c2):
-    return math.sqrt((c2[0] - c1[0]) ** 2 + (c2[1] - c1[1]) ** 2)
+# def sldist(c1, c2):
+#     return math.sqrt((c2[0] - c1[0]) ** 2 + (c2[1] - c1[1]) ** 2)
 
 
 class DrivingBenchmark(object):

@@ -4,9 +4,10 @@ An interface for asynchronous vectorized environments.
 
 import multiprocessing as mp
 import numpy as np
+from stable_baselines3.common import logger
+
 from .vec_env import VecEnv, CloudpickleWrapper, clear_mpi_env_vars
 import ctypes
-from baselines import logger
 
 from .util import dict_to_obs, obs_space_info, obs_to_dict
 
