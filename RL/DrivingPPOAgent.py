@@ -1,17 +1,20 @@
 import csv
 import os
 import random
-
+import carla
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from shapely.geometry import Polygon, MultiPolygon
-import carla
+#from shapely.geometry import Polygon, MultiPolygon
+#import carla
 from RL.ACNetwork import ActorCriticNetwork
 from RL.carla_environment import CarlaEnv
+from RL.environment.action_utils import CarlaActionsConverter
+from RL.environment.envs_manager import make_vec_envs
+from RL.environment.observation_utils import CarlaObservationConverter
 from agents.tools.misc import compute_distance, get_speed
 
 import math
@@ -43,7 +46,7 @@ class DrivingPPOAgent:
         self.in_speed_dim = ...
         self.out_speed_dim = ...
 
-        self.vehicle
+        self.vehicle = ...
 
         self.network = ActorCriticNetwork(input_steering_dim=self.in_steer_dim, output_steering_dim=self.out_steer_dim, input_speed_dim=self.in_speed_dim, output_speed_dim=self.out_speed_dim).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=learning_rate)
@@ -158,14 +161,13 @@ def random_spawn(world, blueprint):
     spawn_point.rotation.pitch = 0.0
     return world.try_spawn_actor(blueprint, spawn_point)
 
-
 def run_episode(env, agent, vehicle, images, distance_to_vehicle, speed_signs=None, pedestrians=None, red_lights=None):
     """
     Run a single episode and return the collected data
     The images are what the camera captures or the processed image for lane detection (given by the
     computer vision module)
     distance_to_vehicle: given by computer vision module
-    speed_signs: given by computer vision module or by carla
+    speed_signs: given by computer vision module or by carla_env
     pedestrians: given by computer vision module
     red_lights: given by computer vision module
     """
@@ -233,17 +235,14 @@ def main():
     target_pos = [11530.0, 13000.0, 0]
 
     client = carla.Client("localhost", 2000)
-    server_version = client.get_server_version()
-    client_version = client.get_client_version()
-    print(client.get_available_maps())
+    #server_version = client.get_server_version()
+    #client_version = client.get_client_version()
+    #print(client.get_available_maps())
 
-    client.set_timeout(10.0)
+    #client.set_timeout(10.0)
     env = client.get_world()
     vehicle = setup_player(world=env)
     world = CarlaEnv(client=client)
-
-    # Initialize agent
-    agent = DrivingPPOAgent(env, learning_rate=3e-4, vehicle=vehicle)
 
     # Training metrics
     metrics = {
@@ -252,6 +251,27 @@ def main():
     }
 
     print("Starting training...")
+    obs_converter = CarlaObservationConverter(h=84, w=84, rel_coord_system=False)
+    action_type = "continuous"
+    # action_type = "carla_env-original"
+    action_converter = CarlaActionsConverter(action_type)
+    # startin_point = random_spawn(env, vehicle)
+    starting_port = 6969
+    seed = np.random.seed(1337)
+    num_processes = 1
+    gamma = 0.99
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    reward_class = "CarlaReward"
+    subset = None
+    experiment_name = "PPO-RL-test"
+    envs = make_vec_envs(obs_converter, action_converter, starting_port, seed, num_processes,
+                         gamma, device, reward_class, num_frame_stack=1, subset=subset,
+                         norm_reward=True, norm_obs=True, apply_her=False,
+                         video_every=100,
+                         video_dir=os.path.join("./videos", 'video', experiment_name))
+
+    # Initialize agent
+    agent = DrivingPPOAgent(envs, learning_rate=3e-4, vehicle=vehicle)
 
     for iteration in range(num_iterations):
         episode_data = []
@@ -262,7 +282,7 @@ def main():
         # Collect episodes with different initial conditions
         for episode in range(num_episodes_per_update):
             # Run episode
-            episode_result = run_episode(env, agent, vehicle, images, distance_to_vehicle, speed_signs, pedestrians, red_lights)
+            episode_result = run_episode(envs, agent, vehicle, images, distance_to_vehicle, speed_signs, pedestrians, red_lights)
             episode_data.append(episode_result)
             total_reward += episode_result['episode_reward']
 
@@ -322,8 +342,6 @@ def evaluate_trained_agent(checkpoint_path, num_episodes=3):
     Evaluate the trained agent.
     """
     # Set up environment without rendering
-    car_pos = [2060.0, -50.0]
-    target_pos = [-1530.0, 12010.0]
     client = carla.Client("localhost", 2000)
     server_version = client.get_server_version()
     client_version = client.get_client_version()

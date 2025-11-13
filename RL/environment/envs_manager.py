@@ -10,11 +10,6 @@ from RL.openai_baseline.vec_env.vec_normalize import VecNormalize
 from RL.openai_baseline.vec_env import VecEnvWrapper
 from RL.openai_baseline.vec_env import SubprocVecEnv
 from RL.openai_baseline.vec_env.util import dict_to_obs, obs_to_dict
-#from vec_env import VecEnvWrapper
-#from vec_env.subproc_vec_env import SubprocVecEnv
-#from vec_env.dummy_vec_env import DummyVecEnv
-#from vec_env.vec_normalize import VecNormalize
-#from vec_env.util import dict_to_obs, obs_to_dict
 
 from env import CarlaEnv
 
@@ -26,7 +21,7 @@ def make_env(obs_converter, action_converter, port, id, seed, subset,
                             benchmark=benchmark, city_name=city_name)
 
 def make_vec_envs(obs_converter, action_converter, starting_port, seed, num_processes, gamma,
-                  device, reward_class_name, num_frame_stack=1, subset=None, norm_reward=True, norm_obs=True, video_every=100, video_dir='./video', apply_her=False,
+                  device, reward_class_name, num_frame_stack=1, subset=None, norm_reward=True, norm_obs=True, video_every=100, video_dir='./videos', apply_her=False,
                   experiment_suite='TrainingSuite', benchmark=False, city_name='Town01'):
 
     ports = range(starting_port, starting_port + 3*num_processes, 3)
