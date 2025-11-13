@@ -7,12 +7,12 @@ import numpy as np
 import rewards
 
 import experiment_suites
-import carla.driving_benchmark.experiment_suites as experiment_suites_benchmark
-from carla.client import VehicleControl
-from carla.planner.planner import Planner
-from carla.settings import CarlaSettings
-from carla.client import CarlaClient
-from carla.tcp import TCPConnectionError
+import carla_env.driving_benchmark.experiment_suites as experiment_suites_benchmark
+from carla_env.client import VehicleControl
+from carla_env.planner.planner import Planner
+from carla_env.settings import CarlaSettings
+from carla_env.client import CarlaClient
+from carla_env.tcp import TCPConnectionError
 from observation_utils import CameraException
 import gym
 
@@ -118,7 +118,7 @@ class CarlaEnv(object):
             except TCPConnectionError as e:
                 self.logger.debug('TCPConnectionError inside step(): {}'.format(e))
                 self.done = True
-                return self.last_obs, 0.0, True, {'carla-reward': 0.0}
+                return self.last_obs, 0.0, True, {'carla_env-reward': 0.0}
 
             break
 
@@ -142,7 +142,7 @@ class CarlaEnv(object):
         reward = self._reward.get_reward(measurements, self._target, self.last_direction, control, env_state)
 
         # Additional information
-        info = {'carla-reward': reward}
+        info = {'carla_env-reward': reward}
 
         self.steps += 1
 
