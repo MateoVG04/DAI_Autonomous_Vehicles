@@ -40,7 +40,7 @@ class GlobalRoutePlanner(object):
 
     def trace_route(self, origin, destination):
         """
-        This method returns list of (carla.Waypoint, RoadOption)
+        This method returns list of (carla_env.Waypoint, RoadOption)
         from origin to destination
         """
         route_trace = []
@@ -87,11 +87,11 @@ class GlobalRoutePlanner(object):
         road segments as pairs of waypoint objects, and processes the
         topology into a list of dictionary objects with the following attributes
 
-        - entry (carla.Waypoint): waypoint of entry point of road segment
+        - entry (carla_env.Waypoint): waypoint of entry point of road segment
         - entryxyz (tuple): (x,y,z) of entry point of road segment
-        - exit (carla.Waypoint): waypoint of exit point of road segment
+        - exit (carla_env.Waypoint): waypoint of exit point of road segment
         - exitxyz (tuple): (x,y,z) of exit point of road segment
-        - path (list of carla.Waypoint):  list of waypoints between entry to exit, separated by the resolution
+        - path (list of carla_env.Waypoint):  list of waypoints between entry to exit, separated by the resolution
         """
         self._topology = []
         # Retrieving waypoints to construct a detailed topology
@@ -288,8 +288,8 @@ class GlobalRoutePlanner(object):
         """
         This function finds the shortest path connecting origin and destination
         using A* search with distance heuristic.
-        origin      :   carla.Location object of start position
-        destination :   carla.Location object of of end position
+        origin      :   carla_env.Location object of start position
+        destination :   carla_env.Location object of of end position
         return      :   path as list of node ids (as int) of the graph self._graph
         connecting origin and destination
         """

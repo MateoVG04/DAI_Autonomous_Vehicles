@@ -29,7 +29,7 @@ class ConstantVelocityAgent(BasicAgent):
             :param target_speed: speed (in Km/h) at which the vehicle will move
             :param opt_dict: dictionary in case some of its parameters want to be changed.
                 This also applies to parameters related to the LocalPlanner.
-            :param map_inst: carla.Map instance to avoid the expensive call of getting it.
+            :param map_inst: carla_env.Map instance to avoid the expensive call of getting it.
             :param grp_inst: GlobalRoutePlanner instance to avoid the expensive call of getting it.
         """
         super().__init__(vehicle, target_speed, opt_dict=opt_dict, map_inst=map_inst, grp_inst=grp_inst)

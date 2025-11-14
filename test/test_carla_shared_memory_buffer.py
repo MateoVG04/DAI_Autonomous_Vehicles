@@ -10,7 +10,7 @@ class TestCarlaBuffer:
         height, width = 320, 240
         img_array = np.random.randint(0, 256, size=(height, width, 4), dtype=np.uint8)
 
-        # Create a simple fake carla.Image object with .raw_data
+        # Create a simple fake carla_env.Image object with .raw_data
         fake_carla_img = SimpleNamespace(
             width=width,
             height=height,

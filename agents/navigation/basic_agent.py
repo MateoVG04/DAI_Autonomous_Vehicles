@@ -35,7 +35,7 @@ class BasicAgent(object):
             :param target_speed: speed (in Km/h) at which the vehicle will move
             :param opt_dict: dictionary in case some of its parameters want to be changed.
                 This also applies to parameters related to the LocalPlanner.
-            :param map_inst: carla.Map instance to avoid the expensive call of getting it.
+            :param map_inst: carla_env.Map instance to avoid the expensive call of getting it.
             :param grp_inst: GlobalRoutePlanner instance to avoid the expensive call of getting it.
 
         """
@@ -45,7 +45,7 @@ class BasicAgent(object):
             if isinstance(map_inst, carla.Map):
                 self._map = map_inst
             else:
-                print("Warning: Ignoring the given map as it is not a 'carla.Map'")
+                print("Warning: Ignoring the given map as it is not a 'carla_env.Map'")
                 self._map = self._world.get_map()
         else:
             self._map = self._world.get_map()
@@ -93,7 +93,7 @@ class BasicAgent(object):
             if isinstance(grp_inst, GlobalRoutePlanner):
                 self._global_planner = grp_inst
             else:
-                print("Warning: Ignoring the given map as it is not a 'carla.Map'")
+                print("Warning: Ignoring the given map as it is not a 'carla_env.Map'")
                 self._global_planner = GlobalRoutePlanner(self._map, self._sampling_resolution)
         else:
             self._global_planner = GlobalRoutePlanner(self._map, self._sampling_resolution)
@@ -145,8 +145,8 @@ class BasicAgent(object):
         If no starting location is passed, the vehicle local planner's target location is chosen,
         which corresponds (by default), to a location about 5 meters in front of the vehicle.
 
-            :param end_location (carla.Location): final location of the route
-            :param start_location (carla.Location): starting location of the route
+            :param end_location (carla_env.Location): final location of the route
+            :param start_location (carla_env.Location): starting location of the route
         """
         if not start_location:
             start_location = self._local_planner.target_waypoint.transform.location
@@ -165,7 +165,7 @@ class BasicAgent(object):
         """
         Adds a specific plan to the agent.
 
-            :param plan: list of [carla.Waypoint, RoadOption] representing the route to be followed
+            :param plan: list of [carla_env.Waypoint, RoadOption] representing the route to be followed
             :param stop_waypoint_creation: stops the automatic random creation of waypoints
             :param clean_queue: resets the current agent's plan
         """
@@ -179,8 +179,8 @@ class BasicAgent(object):
         """
         Calculates the shortest route between a starting and ending waypoint.
 
-            :param start_waypoint (carla.Waypoint): initial waypoint
-            :param end_waypoint (carla.Waypoint): final waypoint
+            :param start_waypoint (carla_env.Waypoint): initial waypoint
+            :param end_waypoint (carla_env.Waypoint): final waypoint
         """
         start_location = start_waypoint.transform.location
         end_location = end_waypoint.transform.location
@@ -255,7 +255,7 @@ class BasicAgent(object):
         """
         Method to check if there is a red light affecting the vehicle.
 
-            :param lights_list (list of carla.TrafficLight): list containing TrafficLight objects.
+            :param lights_list (list of carla_env.TrafficLight): list containing TrafficLight objects.
                 If None, all traffic lights in the scene are used
             :param max_distance (float): max distance for traffic lights to be considered relevant.
                 If None, the base threshold value is used
@@ -312,7 +312,7 @@ class BasicAgent(object):
         """
         Method to check if there is a vehicle in front of the agent blocking its path.
 
-            :param vehicle_list (list of carla.Vehicle): list contatining vehicle objects.
+            :param vehicle_list (list of carla_env.Vehicle): list contatining vehicle objects.
                 If None, all vehicle in the scene are used
             :param max_distance: max freespace to check for obstacles.
                 If None, the base threshold value is used

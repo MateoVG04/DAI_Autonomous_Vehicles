@@ -2,7 +2,8 @@ import contextlib
 import os
 from abc import ABC, abstractmethod
 
-from baselines.common.tile_images import tile_images
+from stable_baselines3.common.vec_env.base_vec_env import tile_images
+
 
 class AlreadySteppingError(Exception):
     """

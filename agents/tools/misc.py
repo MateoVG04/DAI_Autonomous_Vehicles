@@ -16,7 +16,7 @@ def draw_waypoints(world, waypoints, z=0.5):
     """
     Draw a list of waypoints at a certain height given in z.
 
-        :param world: carla.world object
+        :param world: carla_env.world object
         :param waypoints: list or iterable container with the waypoints to draw
         :param z: height in meters
     """
@@ -139,7 +139,7 @@ def vector(location_1, location_2):
     """
     Returns the unit vector from location_1 to location_2
 
-        :param location_1, location_2: carla.Location objects
+        :param location_1, location_2: carla_env.Location objects
     """
     x = location_2.x - location_1.x
     y = location_2.y - location_1.y
