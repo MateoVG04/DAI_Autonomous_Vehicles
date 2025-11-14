@@ -1,12 +1,11 @@
 import carla
 import gymnasium as gym
-from agents.navigation.behavior_agent import BehaviorAgent
-from RL.waypoints_utils import get_ego_transform, build_state_vector
 import numpy as np
 import Pyro4
-
-
 import random
+
+from agents.navigation.behavior_agent import BehaviorAgent
+from RL.env_utils import build_state_vector
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -19,12 +18,12 @@ class CarlaEnv(gym.Env):
 
         # Define action and observation space
         # negative action values correspond to braking, positive to throttle
-        self.action_space = gym.spaces.Box(low=-1.0,high=1.0, dtype=np.float32)
+        self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
 
         self.waypoints_size = 15 # Hardcoded for now
+        self.lane_width = 3.5  # meters
         obs_size = self.waypoints_size + 3  # waypoints_size=15 + speed + accel + dist_to_car_ahead
-        self.obs_space = gym.spaces.Box(low=-1.0, high=1.0,
-                                            shape=(obs_size,), dtype=np.float32)
+        self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
         # Behavior agent for navigation
         self.agent = BehaviorAgent(self.vehicle, behavior='normal')
@@ -37,7 +36,7 @@ class CarlaEnv(gym.Env):
         self.world.apply_settings(settings)
 
         # Radar setup
-        self.max_dist_ahead = 50.0
+        self.max_dist_ahead = 40.0  # default max distance
         radar_bp = self.world.get_blueprint_library().find('sensor.other.radar')
         radar_bp.set_attribute('horizontal_fov', '30')
         radar_bp.set_attribute('vertical_fov', '5')
@@ -53,9 +52,10 @@ class CarlaEnv(gym.Env):
         # Keep only objects roughly in front (±10° horizontal, ±2° vertical)
         forward_detections = [d for d in data if abs(np.degrees(d.azimuth)) < 10 and abs(np.degrees(d.altitude)) < 2]
         if forward_detections:
+            # Find the closest object ahead
             self.max_dist_ahead = min(d.depth for d in forward_detections)
         else:
-            self.max_dist_ahead = 50.0  # max distance
+            self.max_dist_ahead = 40.0  # max distance
 
 
     def reset(self, seed=None, options=None):
@@ -84,6 +84,7 @@ class CarlaEnv(gym.Env):
 
     def step(self, action):
         # clip and apply control
+        action = float(np.array(action).squeeze())
         action = np.clip(action, -1.0, 1.0)
         if action > 0:
             throttle = action
@@ -118,55 +119,57 @@ class CarlaEnv(gym.Env):
             self.radar_sensor.destroy()
             self.radar_sensor = None
 
-
-
     def render(self):
         pass
-
 
     def get_obs(self):
         # Get plan
         agent_plan = self.agent.get_local_planner().get_plan()
 
-        # Extract the carla.Waypoint objects
+        # Extract the carla.Waypoint objects (sorted)
         waypoints = [wp[0] for wp in agent_plan]
 
-        ego_pos, ego_yaw = get_ego_transform(self.vehicle)
+        # Get speed and acceleration
         velocity = self.vehicle.get_velocity()
+        acceleration = self.vehicle.get_acceleration()
         speed = np.linalg.norm([velocity.x, velocity.y])
-        accel = np.linalg.norm([self.vehicle.get_acceleration().x,
-                                self.vehicle.get_acceleration().y])
-        dist_to_car_ahead = self.max_dist_ahead
-        return build_state_vector(ego_pos, ego_yaw, waypoints, self.waypoints_size, 3.5, speed, accel, dist_to_car_ahead)
+        accel = np.linalg.norm([acceleration.x, acceleration.y])
+        return build_state_vector(self.vehicle, waypoints, self.waypoints_size, self.lane_width, speed, accel, self.max_dist_ahead)
 
     # TODO: design a better reward function
     def compute_reward(self):
+        """
+        Simple reward function for RL driving:
+        - Penalize small distance ahead
+        - Penalize collision / bad braking
+        - Reward reasonable speed and reaching destination
+        """
+
         reward = 0.0
         terminated = False  # crash or done
 
+        # get speed
         velocity = self.vehicle.get_velocity()
-        speed_kmh = np.linalg.norm([velocity.x, velocity.y])
+        speed = np.linalg.norm([velocity.x, velocity.y])
 
-        target_speed = 30
+        target_speed = 15.0  # m/s (~54 km/h)
 
-        # 1. Reward for being at the target speed (e.g., within a margin)
-        speed_error = abs(speed_kmh - target_speed)
-        # Use a non-linear penalty to punish large errors more
-        reward -= (speed_error ** 2) * 0.01
+        speed_error = abs(speed - target_speed)
+        reward -= 0.05 * (speed_error ** 2)  # quadratic penalty
 
-        # 2. Reward for safe following distance (using your radar)
-        if self.max_dist_ahead < 30.0:
-            # Reward for being close, but penalize for being TOO close
-            # This creates a "sweet spot"
-            safe_distance_reward = 1.0 - (abs(self.max_dist_ahead - 15.0) / 15.0)  # Peaks at 15m
-            reward += safe_distance_reward * 0.05
-
-        # 3. Penalize heavily for near-crash
-        if self.max_dist_ahead < 5.0:
+        # Keep safe distance to car in front
+        if self.max_dist_ahead < 5.0:  # very close to car ahead
             reward -= 10.0
-            terminated = True  # This is a terminal failure state
+            terminated = True
+        elif self.max_dist_ahead < 15.0:  # getting too close
+            reward -= 1.0
 
-        # 4. Reward for reaching destination
+        # penalty for harsh braking
+        brake = self.vehicle.get_control().brake
+        if brake > 0.8:  # very harsh braking
+            reward -= 0.5
+
+        # Reward for reaching destination
         if self.agent.done():
             reward += 20.0  # Large reward for finishing
             terminated = True
