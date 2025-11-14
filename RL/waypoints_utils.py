@@ -101,6 +101,8 @@ def update_spectator(vehicle_transform, distance_behind, height_above):
     return spectator_transform
 
 
+
+## TODO: check whether this function works
 def get_distance_to_lead_vehicle(world, ego_vehicle, max_distance):
     ego_transform = ego_vehicle.get_transform()
     ego_location = ego_transform.location
