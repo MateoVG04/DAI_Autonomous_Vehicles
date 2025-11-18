@@ -9,7 +9,7 @@ class RemoteCarlaEnv(gym.Env):
         super().__init__()
         # Connect to the remote object published by the server
         # change port
-        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:45865") # for now, hardcoded port
+        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:44133") # for now, hardcoded port
 
         # define spaces due to serialization issues
         self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
@@ -32,9 +32,40 @@ class RemoteCarlaEnv(gym.Env):
 
 env = RemoteCarlaEnv()
 
-model = DDPG("MlpPolicy", env, verbose=1, tensorboard_log="./ddpg_carla_tensorboard/")
-model.learn(total_timesteps=50000)
+def train(env, total_timesteps=100000):
+    model = DDPG("MlpPolicy", env, verbose=1, tensorboard_log="./ddpg_carla_tensorboard/")
+    model.learn(total_timesteps=total_timesteps)
+    model.save("ddpg_carla_model")
+    print("finished training")
 
-model.save("ddpg_carla_model")
 
-print("finished training")
+def evaluate(model_path, episodes=5, max_steps=1000):
+    # Load environment & model
+    env = RemoteCarlaEnv()
+    model = DDPG.load(model_path, env=env)
+
+    for ep in range(episodes):
+        obs, info = env.reset()
+        ep_reward = 0
+
+        print(f"=== Episode {ep + 1} ===")
+
+        for step in range(max_steps):
+            # deterministic=True → no exploration noise during evaluation
+            action, _ = model.predict(obs, deterministic=True)
+
+            obs, reward, done, truncated, info = env.step(action)
+            ep_reward += reward
+
+            if done or truncated:
+                break
+
+        print(f"Episode reward: {ep_reward}")
+
+    env.close()
+    print("Evaluation finished.")
+
+
+if __name__ == "__main__":
+    train(env, total_timesteps=100000)
+    evaluate("ddpg_carla_model", episodes=3)
