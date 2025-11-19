@@ -1,7 +1,10 @@
 import gymnasium as gym
 import Pyro4
-from stable_baselines3 import DDPG
 import numpy as np
+import time
+from stable_baselines3 import DDPG
+from stable_baselines3.common.noise import NormalActionNoise
+from stable_baselines3.common.callbacks import CheckpointCallback
 
 # Proxy class to interact with the remote Carla environment
 class RemoteCarlaEnv(gym.Env):
@@ -9,7 +12,7 @@ class RemoteCarlaEnv(gym.Env):
         super().__init__()
         # Connect to the remote object published by the server
         # change port
-        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:44133") # for now, hardcoded port
+        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:32839") # for now, hardcoded port
 
         # define spaces due to serialization issues
         self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
@@ -30,14 +33,29 @@ class RemoteCarlaEnv(gym.Env):
         self.remote_env.close()
 
 
-def train(env, total_timesteps=100000):
-    model = DDPG("MlpPolicy", env, verbose=1, tensorboard_log="./ddpg_carla_tensorboard/")
-    model.learn(total_timesteps=total_timesteps)
-    model.save("ddpg_carla_model")
-    print("finished training")
+def train(env, total_timesteps=200_000):
+    n_actions = env.action_space.shape[0]
+    action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
+    model = DDPG(
+        "MlpPolicy",
+        env,
+        learning_rate=1e-4,
+        batch_size=256,
+        tau=0.005,               # soft update
+        action_noise=action_noise,
+        verbose=1,
+        tensorboard_log="./ddpg_carla_tensorboard/"
+    )
+
+    # Save checkpoints every 20k steps
+    checkpoint_callback = CheckpointCallback(save_freq=20_000, save_path="./checkpoints/", name_prefix="ddpg_carla")
+
+    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
+    model.save("ddpg_carla_final")
+    print("Training finished.")
 
 
-def evaluate(model_path, env, episodes=5, max_steps=1000):
+def evaluate(model_path, env, episodes, max_steps):
     # Load environment & model
     model = DDPG.load(model_path, env=env)
 
@@ -54,6 +72,8 @@ def evaluate(model_path, env, episodes=5, max_steps=1000):
             obs, reward, done, truncated, info = env.step(action)
             ep_reward += reward
 
+            time.sleep(0.05)  # 50 ms = ~20 FPS, adjust as needed
+
             if done or truncated:
                 break
 
@@ -65,5 +85,5 @@ def evaluate(model_path, env, episodes=5, max_steps=1000):
 
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
-    train(env, total_timesteps=100000)
-    evaluate("ddpg_carla_model", env, episodes=3, max_steps=10000)
+    # train(env, total_timesteps=500_000)
+    evaluate("ddpg_carla_final", env, episodes=5, max_steps=10_000)

@@ -38,13 +38,13 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     """
     ego_pos, ego_yaw = get_ego_transform(vehicle)
 
-    max_distance = 50
+    max_distance = 40
     max_offset = lane_width / 2
     future_waypoints  = waypoints[:frame_size]
     xy_local = []
     for wp in future_waypoints:
         local_coords = global_to_local(ego_pos, ego_yaw,
-                                       (wp.transform.location.x, wp.transform.location.y))
+            (wp.transform.location.x, wp.transform.location.y))
         y_norm = np.clip(local_coords[1] / max_offset, -1, 1)
         x_norm = np.clip(local_coords[0] / max_distance, 0, 1)
         xy_local.extend([x_norm, y_norm])
@@ -59,5 +59,6 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     dist_norm = np.clip(dist_to_car_ahead / max_distance, 0, 1)
 
     xy_local.extend([speed_norm, accel_norm, dist_norm])
+
     return np.array(xy_local, dtype=np.float32)
 

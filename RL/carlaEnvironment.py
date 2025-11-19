@@ -137,42 +137,49 @@ class CarlaEnv(gym.Env):
 
     # TODO: design a better reward function
     def compute_reward(self):
-        """
-        Simple reward function for RL driving:
-        - Penalize small distance ahead
-        - Penalize collision / bad braking
-        - Reward reasonable speed and reaching destination
-        """
-
         reward = 0.0
-        terminated = False  # crash or done
+        terminated = False
 
-        # get speed
+        # ====== Speed Reward (Adaptive to Lead Car) ======
+        target_speed = 15.0  # m/s
         velocity = self.vehicle.get_velocity()
         speed = np.linalg.norm([velocity.x, velocity.y])
 
-        target_speed = 15.0  # m/s (~54 km/h)
+        # If a car is ahead within 25m, follow ITS speed instead
+        if self.max_dist_ahead < 25.0:
+            desired_speed = min(target_speed, speed)  # match front car
+        else:
+            desired_speed = target_speed
 
-        speed_error = abs(speed - target_speed)
-        reward -= 0.05 * (speed_error ** 2)  # quadratic penalty
+        speed_error = abs(speed - desired_speed)
+        reward -= 0.03 * (speed_error ** 2)
 
-        # Keep safe distance to car in front
-        if self.max_dist_ahead < 5.0:  # very close to car ahead
-            reward -= 10.0
+        # ====== Distance to Lead Car Reward ======
+        if self.max_dist_ahead < 5.0:
+            reward -= 50.0  # heavy penalty for too close
             terminated = True
-        elif self.max_dist_ahead < 15.0:  # getting too close
-            reward -= 1.0
+        else:
+            # smooth penalty for being too close
+            desired_gap = 10.0 + speed * 0.5  # dynamic gap rule
+            gap_error = desired_gap - self.max_dist_ahead
+            if gap_error > 0:
+                reward -= 0.02 * gap_error  # soft penalty
 
-        # penalty for harsh braking
-        brake = self.vehicle.get_control().brake
-        if brake > 0.8:  # very harsh braking
-            reward -= 0.5
+        # ====== Smoothness reward ======
+        control = self.vehicle.get_control()
+        reward -= 0.5 * (control.brake ** 2)
+        reward -= 0.2 * (control.throttle ** 2)
 
-        # Reward for reaching destination
+        # ====== Progress Reward ======
+        # continuous reward for moving forward
+        reward += 0.05 * speed
+
+        # ====== Goal reached ======
         if self.agent.done():
-            reward += 20.0  # Large reward for finishing
+            reward += 100.0
             terminated = True
 
         return reward, terminated
+
 
 
