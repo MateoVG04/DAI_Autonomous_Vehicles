@@ -30,8 +30,6 @@ class RemoteCarlaEnv(gym.Env):
         self.remote_env.close()
 
 
-env = RemoteCarlaEnv()
-
 def train(env, total_timesteps=100000):
     model = DDPG("MlpPolicy", env, verbose=1, tensorboard_log="./ddpg_carla_tensorboard/")
     model.learn(total_timesteps=total_timesteps)
@@ -39,9 +37,8 @@ def train(env, total_timesteps=100000):
     print("finished training")
 
 
-def evaluate(model_path, episodes=5, max_steps=1000):
+def evaluate(model_path, env, episodes=5, max_steps=1000):
     # Load environment & model
-    env = RemoteCarlaEnv()
     model = DDPG.load(model_path, env=env)
 
     for ep in range(episodes):
@@ -67,5 +64,6 @@ def evaluate(model_path, episodes=5, max_steps=1000):
 
 
 if __name__ == "__main__":
+    env = RemoteCarlaEnv()
     train(env, total_timesteps=100000)
-    evaluate("ddpg_carla_model", episodes=3)
+    evaluate("ddpg_carla_model", env, episodes=3, max_steps=10000)

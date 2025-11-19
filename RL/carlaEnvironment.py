@@ -40,7 +40,7 @@ class CarlaEnv(gym.Env):
         radar_bp = self.world.get_blueprint_library().find('sensor.other.radar')
         radar_bp.set_attribute('horizontal_fov', '30')
         radar_bp.set_attribute('vertical_fov', '5')
-        radar_bp.set_attribute('range', '50')
+        radar_bp.set_attribute('range', '40')
         radar_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
         self.radar_sensor = world.spawn_actor(radar_bp, radar_transform, attach_to=self.vehicle)
         self.radar_sensor.listen(self.radar_callback)
@@ -56,7 +56,6 @@ class CarlaEnv(gym.Env):
             self.max_dist_ahead = min(d.depth for d in forward_detections)
         else:
             self.max_dist_ahead = 40.0  # max distance
-
 
     def reset(self, seed=None, options=None):
         # Pick a random spawn point
