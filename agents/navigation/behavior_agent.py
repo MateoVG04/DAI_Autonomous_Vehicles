@@ -201,7 +201,7 @@ class BehaviorAgent(BasicAgent):
             :param vehicle: car to follow
             :param distance: distance from vehicle
             :param debug: boolean for debugging
-            :return control: carla.VehicleControl
+            :return control: carla_env.VehicleControl
         """
 
         vehicle_speed = get_speed(vehicle)
@@ -241,7 +241,7 @@ class BehaviorAgent(BasicAgent):
         Execute one step of navigation.
 
             :param debug: boolean for debugging
-            :return control: carla.VehicleControl
+            :return control: carla_env.VehicleControl
         """
         self._update_information()
 

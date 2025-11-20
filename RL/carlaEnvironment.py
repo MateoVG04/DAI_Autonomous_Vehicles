@@ -1,21 +1,33 @@
+import carla
 import gymnasium as gym
-from waypoints_utils import *
+import numpy as np
+import Pyro4
+import random
 
+from agents.navigation.behavior_agent import BehaviorAgent
+from RL.env_utils import build_state_vector
 
+@Pyro4.expose
 class CarlaEnv(gym.Env):
-    def __init__(self, world, vehicle, waypoints, frame_size):
+    def __init__(self, world, vehicle):
         super().__init__()
+
+        # World and vehicle
         self.world = world
         self.vehicle = vehicle
-        self.waypoints = waypoints
-        self.frame_size = frame_size
 
-        self.action_space = gym.spaces.Box(low=np.array([0.0, 0.0]),
-                                       high=np.array([1.0, 1.0]),
-                                       dtype=np.float32)
-        obs_size = frame_size + 3
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0,
-                                            shape=(obs_size,), dtype=np.float32)
+        # Define action and observation space
+        # negative action values correspond to braking, positive to throttle
+        self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
+
+        self.waypoints_size = 15 # Hardcoded for now
+        self.lane_width = 3.5  # meters
+        obs_size = self.waypoints_size + 3  # waypoints_size=15 + speed + accel + dist_to_car_ahead
+        self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
+
+        # Behavior agent for navigation
+        self.agent = BehaviorAgent(self.vehicle, behavior='normal')
+        self.spawn_points = self.world.get_map().get_spawn_points()
 
         # Set synchronous mode
         settings = self.world.get_settings()
@@ -24,82 +36,150 @@ class CarlaEnv(gym.Env):
         self.world.apply_settings(settings)
 
         # Radar setup
-        self.max_dist_ahead = 50.0
+        self.max_dist_ahead = 40.0  # default max distance
         radar_bp = self.world.get_blueprint_library().find('sensor.other.radar')
         radar_bp.set_attribute('horizontal_fov', '30')
         radar_bp.set_attribute('vertical_fov', '5')
-        radar_bp.set_attribute('range', '50')
-
-
+        radar_bp.set_attribute('range', '40')
         radar_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
         self.radar_sensor = world.spawn_actor(radar_bp, radar_transform, attach_to=self.vehicle)
         self.radar_sensor.listen(self.radar_callback)
 
+        # Episode step counter
         self.episode_step = 0
 
     def radar_callback(self, data):
-        # Keep only objects roughly in front (±5° horizontal, ±2° vertical)
-        forward_detections = [d for d in data if abs(math.degrees(d.azimuth)) < 5 and abs(math.degrees(d.altitude)) < 2]
+        # Keep only objects roughly in front (±10° horizontal, ±2° vertical)
+        forward_detections = [d for d in data if abs(np.degrees(d.azimuth)) < 10 and abs(np.degrees(d.altitude)) < 2]
         if forward_detections:
+            # Find the closest object ahead
             self.max_dist_ahead = min(d.depth for d in forward_detections)
         else:
-            self.max_dist_ahead = 50.0  # max distance
+            self.max_dist_ahead = 40.0  # max distance
 
-    def reset(self):
-        # Reset vehicle
-        spawn_point = self.world.get_map().get_spawn_points()[0]
+    def reset(self, seed=None, options=None):
+        # Pick a random spawn point
+        spawn_point = random.choice(self.spawn_points)
+
+        # Pick a random destination that is NOT the spawn point
+        destination = spawn_point
+        while destination == spawn_point:
+            destination = random.choice(self.spawn_points)
+
+        # Set the vehicle to the spawn point
         self.vehicle.set_transform(spawn_point)
-        self.vehicle.set_velocity(carla.Vector3D(0,0,0))
-        self.vehicle.set_angular_velocity(carla.Vector3D(0,0,0))
-        self.vehicle.set_acceleration(carla.Vector3D(0,0,0))
+
+        # Reset vehicle physics
+        self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=0.0))
+
+        # Set the agent's destination
+        self.agent.set_destination(destination.location)
+
+        # Reset step counter
         self.episode_step = 0
-        return self.get_state()
+
+        # Return initial state (toList for pyro serialization)
+        return self.get_obs().tolist(), {}
 
     def step(self, action):
-        throttle = float(np.clip(action[0], 0.0, 1.0))
-        brake = float(np.clip(action[1], 0.0, 1.0))
-        control = carla.VehicleControl(throttle=throttle, brake=brake, steer=0.0)
+        # clip and apply control
+        action = float(np.array(action).squeeze())
+        action = np.clip(action, -1.0, 1.0)
+        if action > 0:
+            throttle = action
+            brake = 0.0
+        else:
+            throttle = 0.0
+            brake = -action
+        agent_control = self.agent.run_step()
+
+        # apply control of the RL agent for throttle and brake, and the behavior agent for steering
+        control = carla.VehicleControl(throttle=throttle, brake=brake, steer=agent_control.steer)
         self.vehicle.apply_control(control)
 
         # Tick synchronous simulation
         self.world.tick()
         self.episode_step += 1
 
-        state = self.get_state()
-        reward, done = self.compute_reward()
-        return state, reward, done, {}
+        # Get state, reward, done
+        obs = self.get_obs()
+        reward, terminated = self.compute_reward()
 
-    def get_state(self):
-        ego_pos, ego_yaw = get_ego_transform(self.vehicle)
-        velocity = self.vehicle.get_velocity()
-        speed = np.linalg.norm([velocity.x, velocity.y])
-        accel = np.linalg.norm([self.vehicle.get_acceleration().x,
-                                self.vehicle.get_acceleration().y])
-        dist_to_car_ahead = self.max_dist_ahead
-        return build_state_vector(ego_pos, ego_yaw, self.waypoints, self.frame_size, 3.5, speed, accel, dist_to_car_ahead)
-
-    def compute_reward(self):
-        """
-        Compute reward based on current state of the environment.
-        :return:
-        reward: float
-        done: bool
-        """
-        reward = 0.0
-        done = False
-
-        # Basic speed-based reward
-        velocity = self.vehicle.get_velocity()
-        speed = np.linalg.norm([velocity.x, velocity.y])
-        reward += speed * 0.05  # scaled speed reward
-
-        # Penalize if car too close
-        if self.max_dist_ahead < 5.0:
-            reward -= 10.0
-            done = True
-
-
+        truncated = False
         if self.episode_step > 1000:
-            done = True
+            truncated = True
 
-        return reward, done
+        # (toList for pyro serialization)
+        return obs.tolist(), reward, terminated, truncated, {}
+
+    def close(self):
+        if self.radar_sensor:
+            self.radar_sensor.stop()
+            self.radar_sensor.destroy()
+            self.radar_sensor = None
+
+    def render(self):
+        pass
+
+    def get_obs(self):
+        # Get plan
+        agent_plan = self.agent.get_local_planner().get_plan()
+
+        # Extract the carla.Waypoint objects (sorted)
+        waypoints = [wp[0] for wp in agent_plan]
+
+        # Get speed and acceleration
+        velocity = self.vehicle.get_velocity()
+        acceleration = self.vehicle.get_acceleration()
+        speed = np.linalg.norm([velocity.x, velocity.y])
+        accel = np.linalg.norm([acceleration.x, acceleration.y])
+        return build_state_vector(self.vehicle, waypoints, self.waypoints_size, self.lane_width, speed, accel, self.max_dist_ahead)
+
+    # TODO: design a better reward function
+    def compute_reward(self):
+        reward = 0.0
+        terminated = False
+
+        # ====== Speed Reward (Adaptive to Lead Car) ======
+        target_speed = 15.0  # m/s
+        velocity = self.vehicle.get_velocity()
+        speed = np.linalg.norm([velocity.x, velocity.y])
+
+        # If a car is ahead within 25m, follow ITS speed instead
+        if self.max_dist_ahead < 25.0:
+            desired_speed = min(target_speed, speed)  # match front car
+        else:
+            desired_speed = target_speed
+
+        speed_error = abs(speed - desired_speed)
+        reward -= 0.03 * (speed_error ** 2)
+
+        # ====== Distance to Lead Car Reward ======
+        if self.max_dist_ahead < 5.0:
+            reward -= 50.0  # heavy penalty for too close
+            terminated = True
+        else:
+            # smooth penalty for being too close
+            desired_gap = 10.0 + speed * 0.5  # dynamic gap rule
+            gap_error = desired_gap - self.max_dist_ahead
+            if gap_error > 0:
+                reward -= 0.02 * gap_error  # soft penalty
+
+        # ====== Smoothness reward ======
+        control = self.vehicle.get_control()
+        reward -= 0.5 * (control.brake ** 2)
+        reward -= 0.2 * (control.throttle ** 2)
+
+        # ====== Progress Reward ======
+        # continuous reward for moving forward
+        reward += 0.05 * speed
+
+        # ====== Goal reached ======
+        if self.agent.done():
+            reward += 100.0
+            terminated = True
+
+        return reward, terminated
+
+
+

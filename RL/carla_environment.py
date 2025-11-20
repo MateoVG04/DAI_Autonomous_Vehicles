@@ -16,7 +16,7 @@ from opentelemetry.sdk._logs import LoggingHandler, LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
-from RL.DrivingPPOAgent import DrivingPPOAgent
+#from RL.DrivingPPOAgent import DrivingPPOAgent
 from agents.navigation.basic_agent import BasicAgent
 import carla
 
@@ -59,7 +59,7 @@ class CarlaEnv:
         # Setting up metrics
         if send_to_otlp:
             # Create a resource for the metrics
-            resource = Resource.create(attributes={"service.name": "carla-simulation"})
+            resource = Resource.create(attributes={"service.name": "carla_env-simulation"})
 
             # Initialize the OTLP metric exporter
             otlp_exporter = OTLPMetricExporter(
@@ -327,7 +327,7 @@ class CarlaEnv:
         meter = metrics.get_meter(__name__)
         distance_hist, speed_hist = self.setup_vehicle_metrics(meter=meter)
 
-        logger.info("carla.Client setup started")
+        logger.info("carla_env.Client setup started")
         carla_client = carla.Client('localhost', 2000)
         self.setup_carla(client=carla_client)
         logger.info("Carla Client started setup finished")

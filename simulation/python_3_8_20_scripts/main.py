@@ -2,6 +2,8 @@ import logging
 import random
 import sys
 import math
+
+import Pyro4
 from matplotlib import pyplot as plt
 
 from opentelemetry import trace, metrics
@@ -34,7 +36,7 @@ def setup_telemetry(address: str, port: int, send_to_otlp: bool = True, log_to_c
     insecure = "https://" not in endpoint
 
     # Create a resource
-    resource = Resource.create(attributes={"service.name": "carla-simulation"})
+    resource = Resource.create(attributes={"service.name": "carla_env-simulation"})
 
     # -----
     # Setting up tracing
@@ -182,6 +184,26 @@ def set_random_destination(world, agent):
 # ==============================================================================
 # -- main() --------------------------------------------------------------
 # ==============================================================================
+def try_start(controller):
+    """
+    Wrapper around rpc runtime controller
+    :param controller: Controller class defined in streamlit dashboard
+    :return: If the starting procedure was successfully
+    """
+    if not controller:
+        return False
+    if controller.should_run():
+        controller.mark_running()
+        return True
+    return False
+def mark_finished(controller):
+    """
+    Wrapper around rpc runtime controller
+    :param controller: Controller class defined in streamlit dashboard
+    """
+    if controller:
+        controller.mark_finished()
+
 def main():
     # -----
     # Parsing input arguments
@@ -200,10 +222,18 @@ def main():
     meter = metrics.get_meter(__name__)
     distance_hist, speed_hist = setup_vehicle_metrics(meter=meter)
 
-    logger.info("carla.Client setup started")
+    logger.info("carla_env.Client setup started")
     carla_client = carla.Client('localhost', 2000)
     setup_carla(logger=logger, client=carla_client)
     logger.info("Carla Client started setup finished")
+
+    # Pyro
+    try:
+        uri = "PYRO:simulation.controller@localhost:40589"
+        controller = Pyro4.Proxy(uri)
+    except Exception as e:
+        controller = None
+        logger.warning(f"Could not connect to dashboard rpc server with e: {str(e)}")
 
     # -----
     # Starting the control loop
@@ -232,11 +262,16 @@ def main():
 
     # 4) Simulation
     end_simulation = False
-    set_random_destination(world, agent)
 
     logger.info("Starting simulation")
+    set_random_destination(world, agent)   # fixme, required when running in no-controller mode
     try:
         while not end_simulation:
+            # Checking for start signal
+            if try_start(controller):
+                set_random_destination(world, agent)
+
+            # Performing full run
             with tracer.start_as_current_span("drive_to_destination") as drive_span:
                 drive_span.set_attribute("destination.distance", 0) # fixme
                 drive_span.set_attribute("loop.count_start", loop_count)
@@ -269,12 +304,8 @@ def main():
                 drive_span.set_status(Status(StatusCode.OK))
                 logger.info("Destination reached")
                 logger.info(f"Image index {shared_memory.latest_image_index}")
+                mark_finished(controller)
 
-                loop_count -= 1
-                if not loop_count or loop_count == 0:
-                    end_simulation = True
-                    break
-                set_random_destination(world, agent)
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt")
     finally:
@@ -299,10 +330,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    camera_width = 800
-    camera_height = 600
-    shared_memory_filepath = "/dev/shm/carla_shared.dat"
-    shared_memory = CarlaWrapper(filename=shared_memory_filepath, image_width=camera_width, image_height=camera_height)
-    latest_image = shared_memory.read_latest_image()
-    plt.imshow(latest_image[:, :, ::-1])
-    plt.show()
