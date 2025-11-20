@@ -1,11 +1,11 @@
-import carla
 import gymnasium as gym
 import numpy as np
 import Pyro4
 import random
 
-from agents.navigation.behavior_agent import BehaviorAgent
+from agents.tools.misc import *
 from RL.env_utils import build_state_vector
+from RL.steering_agent import SteeringAgent
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -14,7 +14,7 @@ class CarlaEnv(gym.Env):
 
         # World and vehicle
         self.world = world
-        self.vehicle = vehicle
+        self.ego_vehicle = vehicle
 
         # Define action and observation space
         # negative action values correspond to braking, positive to throttle
@@ -26,7 +26,7 @@ class CarlaEnv(gym.Env):
         self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
         # Behavior agent for navigation
-        self.agent = BehaviorAgent(self.vehicle, behavior='normal')
+        self.agent = SteeringAgent(self.ego_vehicle, behavior='normal')
         self.spawn_points = self.world.get_map().get_spawn_points()
 
         # Set synchronous mode
@@ -36,13 +36,13 @@ class CarlaEnv(gym.Env):
         self.world.apply_settings(settings)
 
         # Radar setup
-        self.max_dist_ahead = 40.0  # default max distance
+        self.max_dist_ahead = 50.0  # default max distance
         radar_bp = self.world.get_blueprint_library().find('sensor.other.radar')
         radar_bp.set_attribute('horizontal_fov', '30')
         radar_bp.set_attribute('vertical_fov', '5')
         radar_bp.set_attribute('range', '40')
         radar_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
-        self.radar_sensor = world.spawn_actor(radar_bp, radar_transform, attach_to=self.vehicle)
+        self.radar_sensor = world.spawn_actor(radar_bp, radar_transform, attach_to=self.ego_vehicle)
         self.radar_sensor.listen(self.radar_callback)
 
         # Episode step counter
@@ -50,30 +50,34 @@ class CarlaEnv(gym.Env):
 
     def radar_callback(self, data):
         # Keep only objects roughly in front (±10° horizontal, ±2° vertical)
-        forward_detections = [d for d in data if abs(np.degrees(d.azimuth)) < 10 and abs(np.degrees(d.altitude)) < 2]
+        forward_detections = [d for d in data]
         if forward_detections:
             # Find the closest object ahead
             self.max_dist_ahead = min(d.depth for d in forward_detections)
         else:
-            self.max_dist_ahead = 40.0  # max distance
+            self.max_dist_ahead = 50.0  # max distance
 
     def reset(self, seed=None, options=None):
         # Pick a random spawn point
         spawn_point = random.choice(self.spawn_points)
 
         # Pick a random destination that is NOT the spawn point
-        destination = spawn_point
-        while destination == spawn_point:
-            destination = random.choice(self.spawn_points)
+        # Create a list excluding the spawn point
+        possible_destinations = [p for p in self.spawn_points if p != spawn_point]
+
+        # Pick a random destination from the filtered list
+        destination = random.choice(possible_destinations)
 
         # Set the vehicle to the spawn point
-        self.vehicle.set_transform(spawn_point)
+        self.ego_vehicle.set_transform(spawn_point)
 
         # Reset vehicle physics
-        self.vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=0.0))
+        self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=0.0))
 
         # Set the agent's destination
         self.agent.set_destination(destination.location)
+
+        self.max_dist_ahead = 50.0
 
         # Reset step counter
         self.episode_step = 0
@@ -95,7 +99,7 @@ class CarlaEnv(gym.Env):
 
         # apply control of the RL agent for throttle and brake, and the behavior agent for steering
         control = carla.VehicleControl(throttle=throttle, brake=brake, steer=agent_control.steer)
-        self.vehicle.apply_control(control)
+        self.ego_vehicle.apply_control(control)
 
         # Tick synchronous simulation
         self.world.tick()
@@ -122,64 +126,67 @@ class CarlaEnv(gym.Env):
         pass
 
     def get_obs(self):
-        # Get plan
-        agent_plan = self.agent.get_local_planner().get_plan()
 
-        # Extract the carla.Waypoint objects (sorted)
-        waypoints = [wp[0] for wp in agent_plan]
+        waypoints = self.agent.getWaypoints()
 
         # Get speed and acceleration
-        velocity = self.vehicle.get_velocity()
-        acceleration = self.vehicle.get_acceleration()
+        velocity = self.ego_vehicle.get_velocity()
+        acceleration = self.ego_vehicle.get_acceleration()
         speed = np.linalg.norm([velocity.x, velocity.y])
         accel = np.linalg.norm([acceleration.x, acceleration.y])
-        return build_state_vector(self.vehicle, waypoints, self.waypoints_size, self.lane_width, speed, accel, self.max_dist_ahead)
+        return build_state_vector(self.ego_vehicle, waypoints, self.waypoints_size, self.lane_width, speed, accel, self.max_dist_ahead)
 
     # TODO: design a better reward function
     def compute_reward(self):
         reward = 0.0
         terminated = False
 
-        # ====== Speed Reward (Adaptive to Lead Car) ======
-        target_speed = 15.0  # m/s
-        velocity = self.vehicle.get_velocity()
-        speed = np.linalg.norm([velocity.x, velocity.y])
-
-        # If a car is ahead within 25m, follow ITS speed instead
-        if self.max_dist_ahead < 25.0:
-            desired_speed = min(target_speed, speed)  # match front car
-        else:
-            desired_speed = target_speed
-
-        speed_error = abs(speed - desired_speed)
-        reward -= 0.03 * (speed_error ** 2)
-
-        # ====== Distance to Lead Car Reward ======
-        if self.max_dist_ahead < 5.0:
-            reward -= 50.0  # heavy penalty for too close
-            terminated = True
-        else:
-            # smooth penalty for being too close
-            desired_gap = 10.0 + speed * 0.5  # dynamic gap rule
-            gap_error = desired_gap - self.max_dist_ahead
-            if gap_error > 0:
-                reward -= 0.02 * gap_error  # soft penalty
-
-        # ====== Smoothness reward ======
-        control = self.vehicle.get_control()
-        reward -= 0.5 * (control.brake ** 2)
-        reward -= 0.2 * (control.throttle ** 2)
-
-        # ====== Progress Reward ======
-        # continuous reward for moving forward
-        reward += 0.05 * speed
-
-        # ====== Goal reached ======
+        # --- Goal reached ---
         if self.agent.done():
             reward += 100.0
             terminated = True
 
+        # --- Speed reward ---
+        target_speed = 15.0
+        speed = get_speed(self.ego_vehicle) / 3.6  # km/h → m/s
+        reward += -0.05 * ((speed - target_speed) / target_speed) ** 2  # normalized
+
+        # --- Vehicle ahead ---
+        waypoints = self.agent.getWaypoints()
+        vehicle_state, vehicle, distance = self.agent.collision_and_car_avoid_manager(waypoint=waypoints[0])
+        if vehicle_state and vehicle is not None:
+            safe_distance = max(5.0, min(15.0, distance))
+            # Proportional penalty
+            reward += -2.0 * (1.0 - safe_distance / 15.0)
+            if distance < 5.0:
+                terminated = True
+            else:
+                # match speed of leading vehicle
+                lead_speed = get_speed(vehicle) / 3.6
+                reward += -0.1 * abs(speed - lead_speed)
+
+        # --- Tailgating ---
+        if self.agent.behavior.tailgate_counter > 0:
+            reward -= 2.0
+
+        # --- Pedestrian collision ---
+        walker_state, walker, w_distance = self.agent.pedestrian_avoid_manager(waypoint=waypoints[0])
+        if walker_state and w_distance < 5.0:
+            reward -= 10.0
+            terminated = True
+        elif walker_state:
+            reward -= 1.0 * (1.0 - w_distance / 10.0)  # small continuous penalty
+
+        # --- Smoothness reward ---
+        control = self.ego_vehicle.get_control()
+        reward -= 0.5 * control.brake ** 2
+        reward -= 0.2 * control.throttle ** 2
+
+        # --- Progress reward ---
+        reward += 0.05 * speed
+
         return reward, terminated
+
 
 
 

@@ -3,7 +3,7 @@ import Pyro4
 import numpy as np
 import time
 from stable_baselines3 import DDPG
-from stable_baselines3.common.noise import NormalActionNoise
+from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3.common.callbacks import CheckpointCallback
 
 # Proxy class to interact with the remote Carla environment
@@ -12,7 +12,7 @@ class RemoteCarlaEnv(gym.Env):
         super().__init__()
         # Connect to the remote object published by the server
         # change port
-        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:32839") # for now, hardcoded port
+        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:33013") # for now, hardcoded port
 
         # define spaces due to serialization issues
         self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
@@ -33,9 +33,15 @@ class RemoteCarlaEnv(gym.Env):
         self.remote_env.close()
 
 
-def train(env, total_timesteps=200_000):
+def train(env, total_timesteps):
     n_actions = env.action_space.shape[0]
-    action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
+    # for exploration, noise = OU noise
+    action_noise = OrnsteinUhlenbeckActionNoise(
+        mean=np.zeros(n_actions),
+        sigma=0.2 * np.ones(n_actions),  # throttle/brake exploration
+        theta=0.15  # smoothness of changes
+    )
+
     model = DDPG(
         "MlpPolicy",
         env,
@@ -48,9 +54,9 @@ def train(env, total_timesteps=200_000):
     )
 
     # Save checkpoints every 20k steps
-    checkpoint_callback = CheckpointCallback(save_freq=20_000, save_path="./checkpoints/", name_prefix="ddpg_carla")
+    # checkpoint_callback = CheckpointCallback(save_freq=20_000, save_path="./checkpoints/", name_prefix="ddpg_carla")
 
-    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
+    model.learn(total_timesteps=total_timesteps)
     model.save("ddpg_carla_final")
     print("Training finished.")
 
@@ -85,5 +91,5 @@ def evaluate(model_path, env, episodes, max_steps):
 
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
-    # train(env, total_timesteps=500_000)
+    train(env, total_timesteps=500_000)
     evaluate("ddpg_carla_final", env, episodes=5, max_steps=10_000)

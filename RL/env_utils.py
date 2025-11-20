@@ -20,7 +20,7 @@ def global_to_local(ego_pos, ego_yaw, waypoint_pos):
     y_local = np.sin(-ego_yaw) * dx + np.cos(-ego_yaw) * dy
     return np.array([x_local, y_local])
 
-def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel, dist_to_car_ahead):
+def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel, dist_to_obj_ahead):
     """
     Build a state vector for DRL input using only y-values of waypoints ahead.
 
@@ -56,7 +56,7 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     ref_accel = 10.0 # m/s²
     speed_norm = np.clip(speed / ref_speed, 0, 1)
     accel_norm = np.clip(accel / ref_accel, -1, 1)
-    dist_norm = np.clip(dist_to_car_ahead / max_distance, 0, 1)
+    dist_norm = np.clip(dist_to_obj_ahead / max_distance, 0, 1)
 
     xy_local.extend([speed_norm, accel_norm, dist_norm])
 
