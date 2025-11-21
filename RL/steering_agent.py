@@ -43,10 +43,10 @@ class SteeringAgent(BehaviorAgent):
     def behavior(self):
         return self._behavior
 
-    def getWaypoints(self):
+    def get_waypoints(self):
         plan = self.get_local_planner().get_plan()
         return [wp[0] for wp in plan]
 
 
     def run_step(self, debug=False):
-        self.run_step(debug=debug)
+        return super().run_step(debug=debug)

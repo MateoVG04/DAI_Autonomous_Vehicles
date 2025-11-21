@@ -40,7 +40,7 @@ class CarlaEnv(gym.Env):
         radar_bp = self.world.get_blueprint_library().find('sensor.other.radar')
         radar_bp.set_attribute('horizontal_fov', '30')
         radar_bp.set_attribute('vertical_fov', '5')
-        radar_bp.set_attribute('range', '40')
+        radar_bp.set_attribute('range', '50')
         radar_transform = carla.Transform(carla.Location(x=2.5, z=1.0))
         self.radar_sensor = world.spawn_actor(radar_bp, radar_transform, attach_to=self.ego_vehicle)
         self.radar_sensor.listen(self.radar_callback)
@@ -61,7 +61,6 @@ class CarlaEnv(gym.Env):
         # Pick a random spawn point
         spawn_point = random.choice(self.spawn_points)
 
-        # Pick a random destination that is NOT the spawn point
         # Create a list excluding the spawn point
         possible_destinations = [p for p in self.spawn_points if p != spawn_point]
 
@@ -86,35 +85,48 @@ class CarlaEnv(gym.Env):
         return self.get_obs().tolist(), {}
 
     def step(self, action):
-        # clip and apply control
-        action = float(np.array(action).squeeze())
-        action = np.clip(action, -1.0, 1.0)
-        if action > 0:
-            throttle = action
-            brake = 0.0
-        else:
-            throttle = 0.0
-            brake = -action
-        agent_control = self.agent.run_step()
+        try:
+            # clip and apply control
+            action = float(np.array(action).squeeze())
+            action = np.clip(action, -1.0, 1.0)
+            if action > 0:
+                throttle = action
+                brake = 0.0
+            else:
+                throttle = 0.0
+                brake = -action
+            agent_control = self.agent.run_step()
 
-        # apply control of the RL agent for throttle and brake, and the behavior agent for steering
-        control = carla.VehicleControl(throttle=throttle, brake=brake, steer=agent_control.steer)
-        self.ego_vehicle.apply_control(control)
+            # apply control
+            control = carla.VehicleControl(throttle=throttle, brake=brake, steer=agent_control.steer)
+            self.ego_vehicle.apply_control(control)
 
-        # Tick synchronous simulation
-        self.world.tick()
-        self.episode_step += 1
+            # Tick synchronous simulation
+            self.world.tick()
+            self.episode_step += 1
 
-        # Get state, reward, done
-        obs = self.get_obs()
-        reward, terminated = self.compute_reward()
+            # Get waypoints
+            waypoints = self.agent.get_waypoints()
 
-        truncated = False
-        if self.episode_step > 1000:
-            truncated = True
+            # Get state, reward, done
+            obs = self.get_obs(waypoints)
 
-        # (toList for pyro serialization)
-        return obs.tolist(), reward, terminated, truncated, {}
+            # --- CRITICAL CHANGE: PASS OBS (waypoints) TO REWARD TO AVOID RE-CALCULATION ---
+            reward, terminated = self.compute_reward(waypoints)
+
+            truncated = False
+            if self.episode_step > 1000:
+                truncated = True
+
+            return obs.tolist(), float(reward), bool(terminated), bool(truncated), {}
+
+        except Exception as e:
+            import traceback
+            print("SERVER ERROR")
+            traceback.print_exc()  # This prints the REAL error to the server terminal
+            # Re-raise a clean string error so Pyro doesn't crash
+            raise RuntimeError(f"Server Crashed: {str(e)}")
+
 
     def close(self):
         if self.radar_sensor:
@@ -125,68 +137,101 @@ class CarlaEnv(gym.Env):
     def render(self):
         pass
 
-    def get_obs(self):
-
-        waypoints = self.agent.getWaypoints()
+    def get_obs(self, waypoints=None):
+        # Safety check for waypoints
+        if waypoints is None:
+            waypoints = self.agent.get_waypoints()
 
         # Get speed and acceleration
         velocity = self.ego_vehicle.get_velocity()
         acceleration = self.ego_vehicle.get_acceleration()
         speed = np.linalg.norm([velocity.x, velocity.y])
         accel = np.linalg.norm([acceleration.x, acceleration.y])
+
         return build_state_vector(self.ego_vehicle, waypoints, self.waypoints_size, self.lane_width, speed, accel, self.max_dist_ahead)
 
     # TODO: design a better reward function
-    def compute_reward(self):
+    def compute_reward(self, waypoints=None):
         reward = 0.0
         terminated = False
 
-        # --- Goal reached ---
+        if waypoints is None:
+            waypoints = self.agent.get_waypoints()
+
+        # -----------------------------
+        # Get values
+        # -----------------------------
+        speed = get_speed(self.ego_vehicle) / 3.6  # m/s
+        target_speed = 10.0  # m/s
+        ego_transform = self.ego_vehicle.get_transform()
+        ego_location = ego_transform.location
+        ego_yaw = ego_transform.rotation.yaw
+
+        wp = waypoints[0]  # closest waypoint ahead
+        wp_loc = wp.transform.location
+        wp_yaw = wp.transform.rotation.yaw
+
+        # -----------------------------
+        # 1. Progress Reward (MOST IMPORTANT)
+        # -----------------------------
+        dist = ego_location.distance(wp_loc)
+
+        if not hasattr(self, "prev_dist"):
+            self.prev_dist = dist
+
+        progress = self.prev_dist - dist  # positive when moving toward waypoint
+        reward += 5.0 * progress  # scaled for DDPG
+        self.prev_dist = dist
+
+        # -----------------------------
+        # 2. Heading Alignment Reward
+        # -----------------------------
+        yaw_diff = abs((ego_yaw - wp_yaw + 180) % 360 - 180)  # 0–180 deg
+        heading_reward = (1.0 - (yaw_diff / 90.0))  # normalized 1 → aligned, 0 → 90deg off
+        reward += 1.0 * heading_reward
+
+        # -----------------------------
+        # 4. Speed Reward
+        # -----------------------------
+        if speed < target_speed:
+            reward += (speed / target_speed)  # 0 → 1
+        else:
+            reward -= 0.2 * (speed - target_speed)
+
+        # Strong anti-parking (your old was too small)
+        if speed < 0.2:  # 0.2 m/s = 0.7 km/h
+            reward -= 2.0
+
+        # -----------------------------
+        # 6. Collision and Pedestrian Penalties
+        # -----------------------------
+        vehicle_state, vehicle, dist_v = self.agent.collision_and_car_avoid_manager(waypoint=wp)
+        if vehicle_state:
+            reward -= 1.0
+            if dist_v < 5.0:
+                reward -= 50.0
+                terminated = True
+
+        walker_state, walker, dist_w = self.agent.pedestrian_avoid_manager(waypoint=wp)
+        if walker_state:
+            reward -= 2.0
+            if dist_w < 5.0:
+                reward -= 100.0
+                terminated = True
+
+        # -----------------------------
+        # 7. Tailgating Penalty
+        # -----------------------------
+        if self.agent.behavior.tailgate_counter > 0:
+            reward -= 1.0
+
+        # -----------------------------
+        # 8. Goal Reached
+        # -----------------------------
         if self.agent.done():
             reward += 100.0
             terminated = True
 
-        # --- Speed reward ---
-        target_speed = 15.0
-        speed = get_speed(self.ego_vehicle) / 3.6  # km/h → m/s
-        reward += -0.05 * ((speed - target_speed) / target_speed) ** 2  # normalized
-
-        # --- Vehicle ahead ---
-        waypoints = self.agent.getWaypoints()
-        vehicle_state, vehicle, distance = self.agent.collision_and_car_avoid_manager(waypoint=waypoints[0])
-        if vehicle_state and vehicle is not None:
-            safe_distance = max(5.0, min(15.0, distance))
-            # Proportional penalty
-            reward += -2.0 * (1.0 - safe_distance / 15.0)
-            if distance < 5.0:
-                terminated = True
-            else:
-                # match speed of leading vehicle
-                lead_speed = get_speed(vehicle) / 3.6
-                reward += -0.1 * abs(speed - lead_speed)
-
-        # --- Tailgating ---
-        if self.agent.behavior.tailgate_counter > 0:
-            reward -= 2.0
-
-        # --- Pedestrian collision ---
-        walker_state, walker, w_distance = self.agent.pedestrian_avoid_manager(waypoint=waypoints[0])
-        if walker_state and w_distance < 5.0:
-            reward -= 10.0
-            terminated = True
-        elif walker_state:
-            reward -= 1.0 * (1.0 - w_distance / 10.0)  # small continuous penalty
-
-        # --- Smoothness reward ---
-        control = self.ego_vehicle.get_control()
-        reward -= 0.5 * control.brake ** 2
-        reward -= 0.2 * control.throttle ** 2
-
-        # --- Progress reward ---
-        reward += 0.05 * speed
-
         return reward, terminated
-
-
 
 

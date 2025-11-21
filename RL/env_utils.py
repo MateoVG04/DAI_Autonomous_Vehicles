@@ -31,7 +31,7 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
         lane_width: float, width of the lane for normalization
         speed: float, current speed of the vehicle
         accel: float, current acceleration of the vehicle
-        dist_to_car_ahead: float, distance to car ahead
+        dist_to_obj_ahead: float, distance to car ahead
 
     Returns:
         np.ndarray of shape (frame_size,), x- and y-values

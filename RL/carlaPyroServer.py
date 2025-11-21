@@ -1,11 +1,31 @@
 import Pyro4
+import Pyro4.naming
+import threading
 import carla
 import random
+import sys
+import logging
+
 from carlaEnvironment import CarlaEnv
+
+
+# Start Name Server in background thread
+
+def nameserver():
+    Pyro4.naming.startNSloop(host="0.0.0.0", port=9090)
+
+ns_thread = threading.Thread(target=nameserver, daemon=True)
+ns_thread.start()
+
+print("Embedded Pyro4 Name Server started on port 9090")
+
+
+# CARLA setup
 
 def setup():
     client = carla.Client('localhost', 2000)
     client.set_timeout(10.0)
+
     world = client.get_world()
     blueprint_library = world.get_blueprint_library()
 
@@ -32,15 +52,19 @@ def setup():
 
     return world, vehicle
 
-world, vehicle = setup()
 
+world, vehicle = setup()
 env = CarlaEnv(world, vehicle)
 
-deamon = Pyro4.Daemon()
+# Register CARLA env with Name Server
+daemon = Pyro4.Daemon(host="0.0.0.0")   # remote access supported
+ns = Pyro4.locateNS(host="localhost", port=9090)
 
-uri = deamon.register(env, objectId="carla.environment")
+uri = daemon.register(env, objectId="carla.environment")
+ns.register("carla.environment", uri)
 
-print("Carla env registered with uri:", uri)
-print("Carla env is ready")
+print("Carla environment registered with Name Server")
+print("URI:", uri)
 
-deamon.requestLoop()
+print("CARLA Pyro server is now running...")
+daemon.requestLoop()

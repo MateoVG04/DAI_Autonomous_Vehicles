@@ -2,7 +2,7 @@ import gymnasium as gym
 import Pyro4
 import numpy as np
 import time
-from stable_baselines3 import DDPG
+from stable_baselines3 import DDPG, TD3
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
 from stable_baselines3.common.callbacks import CheckpointCallback
 
@@ -12,7 +12,7 @@ class RemoteCarlaEnv(gym.Env):
         super().__init__()
         # Connect to the remote object published by the server
         # change port
-        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:33013") # for now, hardcoded port
+        self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment") # for now, hardcoded port
 
         # define spaces due to serialization issues
         self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
@@ -21,8 +21,8 @@ class RemoteCarlaEnv(gym.Env):
 
     def step(self, action):
         action = float(np.array(action).squeeze())
-        obs, reward, done, truncated, info = self.remote_env.step(action)
-        return np.array(obs), reward, done, truncated, info
+        obs, reward, terminated, truncated, info = self.remote_env.step(action)
+        return np.array(obs), reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
         obs_list, info = self.remote_env.reset()
@@ -30,8 +30,10 @@ class RemoteCarlaEnv(gym.Env):
         return obs, info
 
     def close(self):
-        self.remote_env.close()
-
+        try:
+            self.remote_env.close()
+        except:
+            pass
 
 def train(env, total_timesteps):
     n_actions = env.action_space.shape[0]
@@ -63,7 +65,7 @@ def train(env, total_timesteps):
 
 def evaluate(model_path, env, episodes, max_steps):
     # Load environment & model
-    model = DDPG.load(model_path, env=env)
+    model = TD3.load(model_path, env=env)
 
     for ep in range(episodes):
         obs, info = env.reset()
@@ -91,5 +93,5 @@ def evaluate(model_path, env, episodes, max_steps):
 
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
-    train(env, total_timesteps=500_000)
+    train(env, total_timesteps=200_000)
     evaluate("ddpg_carla_final", env, episodes=5, max_steps=10_000)
