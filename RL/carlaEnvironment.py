@@ -26,13 +26,13 @@ class CarlaEnv(gym.Env):
         # Action: single continuous value in [-1, 1], positive == throttle, negative == brake
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
-        # Observation: sequence of future waypoint x/y normalized + speed, accel, dist_to_car_ahead
-        self.waypoints_size = 15
+        # Observation: sequence of future waypoint x/y normalized + speed, accel, dist_to_obj_ahead
+        self.waypoints_size = 14
         self.lane_width = 3.5
         obs_size = self.waypoints_size * 2 + 3  # x,y per waypoint + speed + accel + dist
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
-        # Behavior agent handles steering if desired
+        # Behavior agent handles steering
         self.agent = SteeringAgent(self.ego_vehicle, behavior='normal')
 
         # Sync simulation settings
@@ -53,6 +53,9 @@ class CarlaEnv(gym.Env):
         self.max_route_dist = 200.0  # used to normalize potential reward
 
         logging.info("CarlaEnv initialized")
+
+    def get_action_space(self):
+        return self.action_space
 
     # ---------------------- sensors ----------------------
     def _setup_radar(self):
@@ -121,7 +124,7 @@ class CarlaEnv(gym.Env):
             throttle = a if a > 0 else 0.0
             brake = -a if a < 0 else 0.0
 
-            # agent steering or allow RL steering (future)
+            # agent steering
             agent_control = self.agent.run_step()
             steer = agent_control.steer
 
@@ -137,11 +140,19 @@ class CarlaEnv(gym.Env):
             obs = self.get_obs(current_waypoints)
             reward, terminated = self.compute_reward(current_waypoints)
 
+            control_info = {
+                "throttle": control.throttle,
+                "brake": control.brake,
+                "steer": control.steer
+            }
+
             truncated = False
             if self.episode_step > 1000:
                 truncated = True
 
-            return obs.tolist(), float(reward), bool(terminated), bool(truncated), {}
+
+
+            return obs.tolist(), float(reward), bool(terminated), bool(truncated), control_info
 
         except Exception as e:
             logging.exception("Error during step()")

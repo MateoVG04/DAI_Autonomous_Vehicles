@@ -20,45 +20,90 @@ def global_to_local(ego_pos, ego_yaw, waypoint_pos):
     y_local = np.sin(-ego_yaw) * dx + np.cos(-ego_yaw) * dy
     return np.array([x_local, y_local])
 
+# def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel, dist_to_obj_ahead):
+#     """
+#     Build a state vector for DRL input using only y-values of waypoints ahead.
+#
+#     Args:
+#         vehicle: CARLA vehicle actor
+#         waypoints: list of CARLA waypoints (global positions)
+#         frame_size: int, number of future waypoints to include
+#         lane_width: float, width of the lane for normalization
+#         speed: float, current speed of the vehicle
+#         accel: float, current acceleration of the vehicle
+#         dist_to_obj_ahead: float, distance to car ahead
+#
+#     Returns:
+#         np.ndarray of shape (frame_size,), x- and y-values
+#     """
+#     ego_pos, ego_yaw = get_ego_transform(vehicle)
+#
+#     max_distance = 40
+#     max_offset = lane_width / 2
+#     future_waypoints  = waypoints[:frame_size]
+#     xy_local = []
+#     for wp in future_waypoints:
+#         local_coords = global_to_local(ego_pos, ego_yaw,
+#             (wp.transform.location.x, wp.transform.location.y))
+#         y_norm = np.clip(local_coords[1] / max_offset, -1, 1)
+#         x_norm = np.clip(local_coords[0] / max_distance, 0, 1)
+#         xy_local.extend([x_norm, y_norm])
+#     while len(xy_local) < frame_size * 2:
+#         xy_local.extend([0.0, 0.0])  # padding for missing waypoints
+#
+#     # Hardcoded for now (city traffic)
+#     ref_speed = 15.0 # m/s (~54 km/h)
+#     ref_accel = 10.0 # m/s²
+#     speed_norm = np.clip(speed / ref_speed, 0, 1)
+#     accel_norm = np.clip(accel / ref_accel, -1, 1)
+#     dist_norm = np.clip(dist_to_obj_ahead / max_distance, 0, 1)
+#
+#     xy_local.extend([speed_norm, accel_norm, dist_norm])
+#
+#     return np.array(xy_local, dtype=np.float32)
+#
+
 def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel, dist_to_obj_ahead):
-    """
-    Build a state vector for DRL input using only y-values of waypoints ahead.
-
-    Args:
-        vehicle: CARLA vehicle actor
-        waypoints: list of CARLA waypoints (global positions)
-        frame_size: int, number of future waypoints to include
-        lane_width: float, width of the lane for normalization
-        speed: float, current speed of the vehicle
-        accel: float, current acceleration of the vehicle
-        dist_to_obj_ahead: float, distance to car ahead
-
-    Returns:
-        np.ndarray of shape (frame_size,), x- and y-values
-    """
     ego_pos, ego_yaw = get_ego_transform(vehicle)
 
-    max_distance = 40
-    max_offset = lane_width / 2
-    future_waypoints  = waypoints[:frame_size]
+    MAX_DIST = 40.0
+    MAX_SPEED = 20.0
+    MAX_ACCEL = 10.0
+
+    future_waypoints = waypoints[:frame_size]
     xy_local = []
+
     for wp in future_waypoints:
-        local_coords = global_to_local(ego_pos, ego_yaw,
-            (wp.transform.location.x, wp.transform.location.y))
-        y_norm = np.clip(local_coords[1] / max_offset, -1, 1)
-        x_norm = np.clip(local_coords[0] / max_distance, 0, 1)
+        lx, ly = global_to_local(
+            ego_pos, ego_yaw,
+            (wp.transform.location.x, wp.transform.location.y)
+        )
+
+        # forward distance in [-1, 1]
+        x_norm = np.clip(lx / MAX_DIST, -1, 1)
+
+        # lateral deviation in [-1, 1]
+        y_norm = np.clip(ly / MAX_DIST, -1, 1)
+
         xy_local.extend([x_norm, y_norm])
+
+    # pad missing
     while len(xy_local) < frame_size * 2:
-        xy_local.extend([0.0, 0.0])  # padding for missing waypoints
+        xy_local.extend([0.0, 0.0])
 
-    # Hardcoded for now (city traffic)
-    ref_speed = 15.0 # m/s (~54 km/h)
-    ref_accel = 10.0 # m/s²
-    speed_norm = np.clip(speed / ref_speed, 0, 1)
-    accel_norm = np.clip(accel / ref_accel, -1, 1)
-    dist_norm = np.clip(dist_to_obj_ahead / max_distance, 0, 1)
+    # compute heading error
+    if future_waypoints:
+        wp0 = future_waypoints[0]
+        wp_yaw = np.deg2rad(wp0.transform.rotation.yaw)
+        yaw_err = np.sin(wp_yaw - ego_yaw)  # smooth in [-1,1]
+    else:
+        yaw_err = 0.0
 
-    xy_local.extend([speed_norm, accel_norm, dist_norm])
+    # normalized speed, accel, distance
+    speed_norm = np.clip(speed / MAX_SPEED, 0, 1)
+    accel_norm = np.clip(accel / MAX_ACCEL, -1, 1)
+    dist_norm = np.clip(dist_to_obj_ahead / 50.0, 0, 1)
+
+    xy_local.extend([yaw_err, speed_norm, accel_norm, dist_norm])
 
     return np.array(xy_local, dtype=np.float32)
-

@@ -1,67 +1,7 @@
-import gymnasium as gym
-import Pyro4
-import numpy as np
+
 import time
-from stable_baselines3 import DDPG, TD3
-from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3.common.callbacks import CheckpointCallback
-
-# Proxy class to interact with the remote Carla environment
-class RemoteCarlaEnv(gym.Env):
-    def __init__(self):
-        super().__init__()
-        # Connect to the remote object published by the server
-        # change port
-        self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment") # for now, hardcoded port
-
-        # define spaces due to serialization issues
-        self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
-
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(33,), dtype=np.float32)
-
-    def step(self, action):
-        action = float(np.array(action).squeeze())
-        obs, reward, terminated, truncated, info = self.remote_env.step(action)
-        return np.array(obs), reward, terminated, truncated, info
-
-    def reset(self, seed=None, options=None):
-        obs_list, info = self.remote_env.reset()
-        obs = np.array(obs_list, dtype=np.float32)
-        return obs, info
-
-    def close(self):
-        try:
-            self.remote_env.close()
-        except:
-            pass
-
-def train(env, total_timesteps):
-    n_actions = env.action_space.shape[0]
-    # for exploration, noise = OU noise
-    action_noise = OrnsteinUhlenbeckActionNoise(
-        mean=np.zeros(n_actions),
-        sigma=0.2 * np.ones(n_actions),  # throttle/brake exploration
-        theta=0.15  # smoothness of changes
-    )
-
-    model = DDPG(
-        "MlpPolicy",
-        env,
-        learning_rate=1e-4,
-        batch_size=256,
-        tau=0.005,               # soft update
-        action_noise=action_noise,
-        verbose=1,
-        tensorboard_log="./ddpg_carla_tensorboard/"
-    )
-
-    # Save checkpoints every 20k steps
-    # checkpoint_callback = CheckpointCallback(save_freq=20_000, save_path="./checkpoints/", name_prefix="ddpg_carla")
-
-    model.learn(total_timesteps=total_timesteps)
-    model.save("ddpg_carla_final")
-    print("Training finished.")
-
+from stable_baselines3 import TD3
+from train import RemoteCarlaEnv
 
 def evaluate(model_path, env, episodes, max_steps):
     # Load environment & model
@@ -77,12 +17,17 @@ def evaluate(model_path, env, episodes, max_steps):
             # deterministic=True → no exploration noise during evaluation
             action, _ = model.predict(obs, deterministic=True)
 
-            obs, reward, done, truncated, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
+
+            # --- Debug vehicle control ---
+            print(info)
+
+
             ep_reward += reward
 
-            time.sleep(0.05)  # 50 ms = ~20 FPS, adjust as needed
+            time.sleep(0.02)  # 50 ms = ~20 FPS, adjust as needed
 
-            if done or truncated:
+            if terminated or truncated:
                 break
 
         print(f"Episode reward: {ep_reward}")
@@ -93,5 +38,7 @@ def evaluate(model_path, env, episodes, max_steps):
 
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
-    train(env, total_timesteps=200_000)
-    evaluate("ddpg_carla_final", env, episodes=5, max_steps=10_000)
+    start = time.time()
+    evaluate("ddpg_carla_final", env, episodes=5, max_steps=100)
+    end = time.time()
+    print(f"Total evaluation time: {end - start}")
