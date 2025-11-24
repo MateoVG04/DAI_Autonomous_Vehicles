@@ -63,47 +63,89 @@ def global_to_local(ego_pos, ego_yaw, waypoint_pos):
 #     return np.array(xy_local, dtype=np.float32)
 #
 
-def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel, dist_to_obj_ahead):
+def build_improved_state_vector(vehicle, waypoints, frame_size, current_steering, speed, dist_to_obj_ahead):
+    """
+    Args:
+        vehicle: Carla actor
+        waypoints: List of raw carla waypoints (dense list)
+        frame_size: How many points to feed the network (e.g., 14)
+        current_steering: The current wheel angle [-1, 1]
+        speed: Current speed in m/s
+        dist_to_obj_ahead: Distance in meters
+    """
     ego_pos, ego_yaw = get_ego_transform(vehicle)
 
-    MAX_DIST = 40.0
-    MAX_SPEED = 20.0
-    MAX_ACCEL = 10.0
+    # CONSTANTS
+    MAX_DIST = 50.0  # Increased lookahead normalization range
+    MAX_SPEED = 30.0  # 20.0 is low for highway/city combined
 
-    future_waypoints = waypoints[:frame_size]
-    xy_local = []
+    # 1. DOWNSAMPLING (Crucial!)
+    # Instead of taking indices 0,1,2... we take 0, 2, 4... or based on distance.
+    # This ensures index 14 represents a point ~30+ meters away, not 7 meters.
+    sample_resolution = 2  # Take every 2nd waypoint
+
+    # Slice the dense list to get a sparse lookahead
+    sparse_indices = [i * sample_resolution for i in range(frame_size)]
+    future_waypoints = []
+    for idx in sparse_indices:
+        if idx < len(waypoints):
+            future_waypoints.append(waypoints[idx])
+
+    polar_coords = []
 
     for wp in future_waypoints:
+        # Transform to Local Frame (Same as your logic)
         lx, ly = global_to_local(
             ego_pos, ego_yaw,
             (wp.transform.location.x, wp.transform.location.y)
         )
 
-        # forward distance in [-1, 1]
-        x_norm = np.clip(lx / MAX_DIST, -1, 1)
+        # 2. CONVERT TO POLAR
+        # Distance to waypoint
+        dist = np.sqrt(lx ** 2 + ly ** 2)
 
-        # lateral deviation in [-1, 1]
-        y_norm = np.clip(ly / MAX_DIST, -1, 1)
+        # Angle to waypoint (atan2 returns radians between -pi and pi)
+        angle = np.arctan2(ly, lx)
 
-        xy_local.extend([x_norm, y_norm])
+        # Normalize
+        dist_norm = np.clip(dist / MAX_DIST, 0, 1)
 
-    # pad missing
-    while len(xy_local) < frame_size * 2:
-        xy_local.extend([0.0, 0.0])
+        # Normalize angle to [-1, 1] (assuming roughly +/- 90 degrees FOV)
+        angle_norm = np.clip(angle / (np.pi / 2), -1, 1)
 
-    # compute heading error
-    if future_waypoints:
-        wp0 = future_waypoints[0]
-        wp_yaw = np.deg2rad(wp0.transform.rotation.yaw)
-        yaw_err = np.sin(wp_yaw - ego_yaw)  # smooth in [-1,1]
-    else:
-        yaw_err = 0.0
+        polar_coords.extend([dist_norm, angle_norm])
 
-    # normalized speed, accel, distance
+    # Pad if we ran out of waypoints (e.g. end of track)
+    expected_len = frame_size * 2
+    while len(polar_coords) < expected_len:
+        # Pad with "Max Distance" and "0 Angle" (Straight ahead far away)
+        polar_coords.extend([1.0, 0.0])
+
+    # 3. PHYSICS STATE
     speed_norm = np.clip(speed / MAX_SPEED, 0, 1)
-    accel_norm = np.clip(accel / MAX_ACCEL, -1, 1)
-    dist_norm = np.clip(dist_to_obj_ahead / 50.0, 0, 1)
+    dist_obj_norm = np.clip(dist_to_obj_ahead / MAX_DIST, 0, 1)
 
-    xy_local.extend([yaw_err, speed_norm, accel_norm, dist_norm])
+    # Add CURRENT STEERING (Proprioception)
+    # This helps the agent know "Rate of Change" needed
+    steering_norm = np.clip(current_steering, -1, 1)
 
-    return np.array(xy_local, dtype=np.float32)
+    # Calculate lateral error to the *immediate* closest path point (lane centering)
+    # This acts as a "Cross Track Error" signal
+    if len(future_waypoints) > 0:
+        wp0 = future_waypoints[0]
+        # A simple approximation of cross-track error is the local Y of the first point
+        lx0, ly0 = global_to_local(ego_pos, ego_yaw, (wp0.transform.location.x, wp0.transform.location.y))
+        cte_norm = np.clip(ly0 / 5.0, -1, 1)  # Normalize by lane width approx
+    else:
+        cte_norm = 0.0
+
+    # Final Vector Assembly
+    final_state = np.concatenate([
+        np.array(polar_coords, dtype=np.float32),  # Path geometry
+        np.array([speed_norm], dtype=np.float32),  # Dynamics
+        np.array([steering_norm], dtype=np.float32),  # Proprioception
+        np.array([cte_norm], dtype=np.float32),  # Immediate Error
+        np.array([dist_obj_norm], dtype=np.float32)  # Safety
+    ])
+
+    return final_state
