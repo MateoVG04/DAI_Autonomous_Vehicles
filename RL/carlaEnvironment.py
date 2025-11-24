@@ -9,6 +9,8 @@ from agents.tools.misc import get_speed
 from RL.env_utils import build_state_vector
 from RL.steering_agent import SteeringAgent
 
+# TODO: Use speed in either m/s or km/h consistently throughout
+
 # light logging configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

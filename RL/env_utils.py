@@ -63,7 +63,7 @@ def global_to_local(ego_pos, ego_yaw, waypoint_pos):
 #     return np.array(xy_local, dtype=np.float32)
 #
 
-def build_improved_state_vector(vehicle, waypoints, frame_size, current_steering, speed, dist_to_obj_ahead):
+def build_state_vector(vehicle, waypoints, frame_size, current_steering, speed, dist_to_obj_ahead):
     """
     Args:
         vehicle: Carla actor
