@@ -22,7 +22,7 @@ class RemoteCarlaEnv(gym.Env):
     def step(self, action):
         action = float(np.array(action).squeeze())
         obs, reward, terminated, truncated, info = self.remote_env.step(action)
-        return np.array(obs), reward, terminated, truncated, info
+        return np.array(obs, dtype=np.float32), reward, terminated, truncated, info
 
     def reset(self, seed=None, options=None):
         obs_list, info = self.remote_env.reset()

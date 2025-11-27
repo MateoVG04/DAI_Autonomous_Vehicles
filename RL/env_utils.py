@@ -70,8 +70,8 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
 
         # Filter: Only accept waypoints that are not significantly behind the vehicle center
         # This prevents the network from being confused by stale points.
-        if local_coords[0] > -1.0:
-            future_local_coords.append(local_coords)
+        # if local_coords[0] > -1.0:
+        #     future_local_coords.append(local_coords)
 
 
     # Now, convert filtered points to Polar Coordinates and normalize
