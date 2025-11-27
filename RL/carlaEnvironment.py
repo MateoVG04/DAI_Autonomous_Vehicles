@@ -154,7 +154,7 @@ class CarlaEnv(gym.Env):
             obs = self.get_obs(wps)
             reward, terminated = self.compute_reward(wps)
 
-            truncated = self.episode_step > 1000
+            truncated = self.episode_step > 200
 
             info = {"steer": steer, "throttle": throttle}
             return obs.tolist(), float(reward), bool(terminated), bool(truncated), info
