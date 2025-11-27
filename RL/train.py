@@ -17,7 +17,7 @@ class RemoteCarlaEnv(gym.Env):
         # define spaces due to serialization issues
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(32,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(35,), dtype=np.float32)
 
     def step(self, action):
         action = float(np.array(action).squeeze())
@@ -70,6 +70,6 @@ def train(env, timesteps):
 if __name__ == '__main__':
     env = RemoteCarlaEnv()
     start = time.time()
-    train(env, 500_000)
+    train(env, 100_000)
     end = time.time()
-    print("Training time:", end - start)
+    print("Training time:", (end - start) // 60, "minutes")

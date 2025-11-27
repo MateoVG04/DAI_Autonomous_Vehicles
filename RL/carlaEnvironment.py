@@ -5,9 +5,8 @@ import Pyro4
 import carla
 import gymnasium as gym
 
-from agents.tools.misc import get_speed
-from RL.env_utils import build_state_vector
-from RL.steering_agent import SteeringAgent
+from env_utils import build_state_vector, get_vehicle_speed_accel
+from steering_agent import SteeringAgent
 
 # light logging configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -27,9 +26,9 @@ class CarlaEnv(gym.Env):
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
         # Observation: sequence of future waypoint x/y normalized + speed, accel, dist_to_obj_ahead
-        self.waypoints_size = 14
+        self.waypoints_size = 15
         self.lane_width = 3.5
-        obs_size = self.waypoints_size * 2 + 3  # x,y per waypoint + speed + accel + dist
+        obs_size = self.waypoints_size * 2 + 5  # x,y per waypoint + speed + accel + steer + cte + dist
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
         # Behavior agent handles steering
@@ -48,14 +47,8 @@ class CarlaEnv(gym.Env):
         # Episode bookkeeping
         self.episode_step = 0
 
-        # Destination and route metadata (set in reset)
-        self.destination = None
-        self.max_route_dist = 200.0  # used to normalize potential reward
-
         logging.info("CarlaEnv initialized")
 
-    def get_action_space(self):
-        return self.action_space
 
     # ---------------------- sensors ----------------------
     def _setup_radar(self):
@@ -92,18 +85,16 @@ class CarlaEnv(gym.Env):
 
         # place vehicle
         self.ego_vehicle.set_transform(spawn_point)
+        self.ego_vehicle.set_simulate_physics(True)
         # ensure physics updated
         try:
             self.world.tick()
         except Exception:
             logging.exception("world.tick() failed in reset")
 
-        # set destination (store explicitly)
-        self.destination = destination.location
-
         # inform agent (global/local planner)
         try:
-            self.agent.set_destination(self.destination)
+            self.agent.set_destination(destination.location)
         except Exception:
             logging.exception("agent.set_destination failed")
 
@@ -112,8 +103,13 @@ class CarlaEnv(gym.Env):
         self.max_dist_ahead = 50.0
         self.episode_step = 0
 
+        # observations and reward
+        all_waypoints = self.agent.get_waypoints()  # fresh local window
+
+        # get current waypoints up to waypoints_size
+        current_waypoints = all_waypoints[:self.waypoints_size]
         # initial observation
-        obs = self.get_obs()
+        obs = self.get_obs(current_waypoints)
         return obs.tolist(), {}
 
     def step(self, action):
@@ -136,7 +132,42 @@ class CarlaEnv(gym.Env):
             self.episode_step += 1
 
             # observations and reward
-            current_waypoints = self.agent.get_waypoints()  # fresh local window
+            all_waypoints = self.agent.get_waypoints()  # fresh local window
+
+            # get current waypoints up to waypoints_size
+            current_waypoints = all_waypoints[:self.waypoints_size]
+            if current_waypoints:
+                # 1. Print to console ONCE per second to prove we have data
+                if self.episode_step % 20 == 0:
+                    print(f"DEBUG: Drawing {len(current_waypoints)} waypoints...")
+
+                for i, wp in enumerate(current_waypoints):
+
+                    loc = wp.transform.location
+
+                    # 2. DRAW GIANT PILLARS
+                    # We draw a line from the road surface (z) up to the air (z+2)
+                    # This makes a "fence" that is impossible to miss.
+                    self.world.debug.draw_line(
+                        carla.Location(loc.x, loc.y, loc.z),  # Start at feet
+                        carla.Location(loc.x, loc.y, loc.z + 3.0),  # End in air
+                        thickness=0.2,
+                        color=carla.Color(255, 0, 0),  # Bright RED
+                        life_time=0.1  # Update every frame
+                    )
+
+                    # 3. Add a ball on top
+                    self.world.debug.draw_point(
+                        carla.Location(loc.x, loc.y, loc.z + 3.0),
+                        size=0.5,
+                        color=carla.Color(0, 255, 0),  # Green top
+                        life_time=0.1
+                    )
+            else:
+                # If this prints, your agent is lost and has no target
+                if self.episode_step % 20 == 0:
+                    print("!!! AGENT HAS NO WAYPOINTS !!!")
+
             obs = self.get_obs(current_waypoints)
             reward, terminated = self.compute_reward(current_waypoints)
 
@@ -149,8 +180,6 @@ class CarlaEnv(gym.Env):
             truncated = False
             if self.episode_step > 1000:
                 truncated = True
-
-
 
             return obs.tolist(), float(reward), bool(terminated), bool(truncated), control_info
 
@@ -172,21 +201,19 @@ class CarlaEnv(gym.Env):
         pass
 
     # ---------------------- observations ----------------------
-    def get_obs(self, waypoints=None):
-        if waypoints is None:
-            waypoints = self.agent.get_waypoints()
+    def get_obs(self, waypoints):
 
-        velocity = self.ego_vehicle.get_velocity()
-        acceleration = self.ego_vehicle.get_acceleration()
-        speed = np.linalg.norm([velocity.x, velocity.y])
-        accel = np.linalg.norm([acceleration.x, acceleration.y])
+        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)
 
-        obs = build_state_vector(self.ego_vehicle, waypoints, self.waypoints_size, self.lane_width, speed, accel, self.max_dist_ahead)
+        steering = self.agent.vehicle.get_control().steer
+        obs = build_state_vector(self.ego_vehicle, waypoints, self.waypoints_size, self.lane_width,
+                                 speed, accel, steering, self.max_dist_ahead)
+
         # ensure numpy float32 array
         return np.array(obs, dtype=np.float32)
 
     # ---------------------- reward ----------------------
-    def compute_reward(self, waypoints=None):
+    def compute_reward(self, waypoints):
         """Stateless potential-based reward using stored self.destination.
 
         Reward is higher when closer to the fixed destination. We also add small
@@ -195,33 +222,35 @@ class CarlaEnv(gym.Env):
         reward = 0.0
         terminated = False
 
-        if self.destination is None:
-            logging.warning("compute_reward called before destination set")
-            return -1.0, False
-
-        if waypoints is None:
-            waypoints = self.agent.get_waypoints()
-
-        # ego position
+        # 1. Get State
         ego_tf = self.ego_vehicle.get_transform()
         ego_loc = ego_tf.location
-        ego_pos = np.array([ego_loc.x, ego_loc.y], dtype=np.float32)
+        ego_fwd = ego_tf.get_forward_vector()
 
-        # destination
-        dest = self.destination
-        dest_pos = np.array([dest.x, dest.y], dtype=np.float32)
+        # 2. Progress Reward (Speed along the lane)
+        # Instead of distance to goal, we look at speed projected onto the road direction
+        vehicle_velocity = self.ego_vehicle.get_velocity()
+        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
 
-        # distance to goal
-        dist_to_goal = float(np.linalg.norm(dest_pos - ego_pos))
-        max_dist = float(getattr(self, 'max_route_dist', 200.0))
-        norm_dist = np.clip(dist_to_goal / max_dist, 0.0, 1.0)
+        if waypoints and len(waypoints) > 0:
+            # Vector pointing to the next waypoint
+            wp_fwd = waypoints[0].transform.rotation.get_forward_vector()
 
-        # potential-based reward (stateless): closer -> larger
-        reward += (1.0 - norm_dist) * 2.0
+            # Dot product: How much of our speed is actually heading toward the waypoint?
+            # If we are going 20m/s but 90 degrees wrong, this rewards 0.
+            speed_reward = (vehicle_velocity.x * wp_fwd.x) + (vehicle_velocity.y * wp_fwd.y)
+            reward += speed_reward * 0.1  # Scale factor
+
+            # 3. Centering Penalty (Cross Track Error)
+            # Calculate distance from ego to the waypoint line
+            # Simple approximation: distance to the nearest waypoint
+            dist_to_center = ego_loc.distance(waypoints[0].transform.location)
+            reward -= dist_to_center * 0.1
+        else:
+            # Fallback if no waypoints found
+            reward -= 1.0
 
         # small anti-parking penalty
-        vel = self.ego_vehicle.get_velocity()
-        speed = np.linalg.norm([vel.x, vel.y])
         if speed < 0.2:
             reward -= 1.0
 
@@ -256,11 +285,8 @@ class CarlaEnv(gym.Env):
             pass
 
         # goal reached
-        goal_thresh = float(getattr(self, 'goal_threshold', 3.0))
-        if dist_to_goal <= goal_thresh or getattr(self.agent, 'done', lambda: False)():
+        if self.agent.done():
             reward += 100.0
             terminated = True
 
-        # clip extremes
-        reward = float(np.clip(reward, -200.0, 200.0))
         return reward, terminated

@@ -26,7 +26,7 @@ def setup():
     client = carla.Client('localhost', 2000)
     client.set_timeout(10.0)
 
-    world = client.get_world()
+    world = client.load_world("Town01")
     blueprint_library = world.get_blueprint_library()
 
     bp = blueprint_library.filter('model3')[0]
