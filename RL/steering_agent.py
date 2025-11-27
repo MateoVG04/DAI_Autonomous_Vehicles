@@ -6,16 +6,8 @@ This module is adapted from the BehaviorAgent to allow for custom behavior param
 This module is used to expose the behaviour agents internal states for use in the RL environment.
 """
 
-
-
-import random
-import numpy as np
-import carla
 from agents.navigation.behavior_agent import BehaviorAgent
-from agents.navigation.local_planner import RoadOption
-from agents.navigation.behavior_types import Cautious, Aggressive, Normal
 
-from agents.tools.misc import get_speed, positive, is_within_distance, compute_distance
 
 
 class SteeringAgent(BehaviorAgent):
@@ -42,6 +34,10 @@ class SteeringAgent(BehaviorAgent):
     @property
     def behavior(self):
         return self._behavior
+
+    @property
+    def vehicle(self):
+        return self._vehicle
 
     def get_waypoints(self):
         plan = self.get_local_planner().get_plan()
