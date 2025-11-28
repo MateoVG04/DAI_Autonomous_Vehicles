@@ -3,24 +3,19 @@ import Pyro4.naming
 import threading
 import carla
 import random
-import sys
 import logging
 
 from carlaEnvironment import CarlaEnv
 
-
-# Start Name Server in background thread
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(stream_handler)
 
 def nameserver():
     Pyro4.naming.startNSloop(host="0.0.0.0", port=9090)
 
-ns_thread = threading.Thread(target=nameserver, daemon=True)
-ns_thread.start()
-
-print("Embedded Pyro4 Name Server started on port 9090")
-
-
-# CARLA setup
 
 def setup():
     client = carla.Client('localhost', 2000)
@@ -32,12 +27,11 @@ def setup():
     bp = blueprint_library.filter('model3')[0]
     spawn_point = random.choice(world.get_map().get_spawn_points())
     vehicle = world.spawn_actor(bp, spawn_point)
-    print(f"Spawned vehicle {vehicle.type_id} at {spawn_point.location}")
 
-    # ---- THIRD-PERSON CHASE CAMERA ----
+    # 3rd person camera
     spectator = world.get_spectator()
 
-    def update_spectator(world_snapshot):
+    def update_spectator(snapshot):
         transform = vehicle.get_transform()
         spectator_transform = carla.Transform(
             transform.location
@@ -48,23 +42,26 @@ def setup():
         spectator.set_transform(spectator_transform)
 
     world.on_tick(update_spectator)
-    print("Third-person chase camera active.")
 
     return world, vehicle
 
 
-world, vehicle = setup()
-env = CarlaEnv(world, vehicle)
+if __name__ == "__main__":
+    # Start Name Server in background thread
+    ns_thread = threading.Thread(target=nameserver, daemon=True)
+    ns_thread.start()
+    logger.log(logging.INFO, "Name Server started on port 9090")
 
-# Register CARLA env with Name Server
-daemon = Pyro4.Daemon(host="0.0.0.0")   # remote access supported
-ns = Pyro4.locateNS(host="localhost", port=9090)
+    # Carla setup
+    world, vehicle = setup()
+    env = CarlaEnv(world, vehicle)
 
-uri = daemon.register(env, objectId="carla.environment")
-ns.register("carla.environment", uri)
+    # Register CARLA env with Name Server
+    daemon = Pyro4.Daemon(host="0.0.0.0")  # remote access supported
+    ns = Pyro4.locateNS(host="localhost", port=9090)
+    uri = daemon.register(env, objectId="carla.environment")
+    ns.register("carla.environment", uri)
+    logger.log(logging.INFO, "Carla environment registered with Name Server")
 
-print("Carla environment registered with Name Server")
-print("URI:", uri)
-
-print("CARLA Pyro server is now running...")
-daemon.requestLoop()
+    logger.log(logging.INFO, "CARLA Pyro server is now running...")
+    daemon.requestLoop()

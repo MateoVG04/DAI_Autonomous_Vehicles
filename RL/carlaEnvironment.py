@@ -10,8 +10,11 @@ from agents.navigation.global_route_planner import GlobalRoutePlanner
 
 from env_utils import build_state_vector, get_vehicle_speed_accel
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(stream_handler)
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -50,11 +53,12 @@ class CarlaEnv(gym.Env):
 
         # Sensors
         self.max_dist_ahead = 50.0
+        self.collision_history = []
         self._setup_sensors()
 
         self.episode_step = 0
 
-        logging.info("CarlaEnv initialized")
+        logger.log(logging.INFO, "CarlaEnv initialized")
 
     def _setup_sensors(self):
         # Radar
@@ -70,7 +74,6 @@ class CarlaEnv(gym.Env):
         self.col_sensor = self.world.spawn_actor(
             bp_col, carla.Transform(), attach_to=self.ego_vehicle)
         self.col_sensor.listen(self.collision_callback)
-        self.collision_history = []
 
     def radar_callback(self, data):
         try:
@@ -83,38 +86,42 @@ class CarlaEnv(gym.Env):
         self.collision_history.append(event)
 
     def reset(self, seed=None, options=None):
-        self.collision_history = []
+        try:
+            # 1. Spawn & Dest
+            spawn_points = self.world.get_map().get_spawn_points()
+            spawn_point = random.choice(spawn_points)
 
-        # 1. Spawn & Dest
-        spawn_points = self.world.get_map().get_spawn_points()
-        spawn_point = random.choice(spawn_points)
+            # Simple dest logic: Pick a point far away or random
+            dest_tf = random.choice(spawn_points)
 
-        # Simple dest logic: Pick a point far away or random
-        dest_tf = random.choice(spawn_points)
+            # 2. Apply Physics
+            self.ego_vehicle.set_transform(spawn_point)
+            self.ego_vehicle.set_simulate_physics(True)
 
-        # 2. Apply Physics
-        self.ego_vehicle.set_transform(spawn_point)
-        self.ego_vehicle.set_simulate_physics(True)
-        self.world.tick()
+            for _ in range(50):  # Let physics settle
+                self.world.tick()
+                self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0))
 
-        # 3. CALCULATE ROUTE & FEED LOCAL PLANNER
-        route = self.grp.trace_route(spawn_point.location, dest_tf.location)
-        self.lp.set_global_plan(route)
+            # 3. CALCULATE ROUTE & FEED LOCAL PLANNER
+            route = self.grp.trace_route(spawn_point.location, dest_tf.location)
+            self.lp.set_global_plan(route)
 
-        # Reset controls
-        self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
-        self.max_dist_ahead = 50.0
-        self.episode_step = 0
+            # Reset controls
+            self.max_dist_ahead = 50.0
+            self.episode_step = 0
+            self.collision_history = []
 
-        # 4. GET OBSERVATION
-        # We retrieve a larger chunk (50) to allow filtering of stale points
-        plan = self.lp.get_plan()
+            # 4. GET OBSERVATION
+            plan = self.lp.get_plan()
 
-        waypoints = [wp[0] for wp in plan]
-        wps = waypoints[:self.waypoints_size]
+            waypoints = [wp[0] for wp in plan]
+            wps = waypoints[:self.waypoints_size]
 
-        obs = self.get_obs(wps)
-        return obs.tolist(), {}
+            obs = self.get_obs(wps)
+            return obs.tolist(), {}
+        except Exception as e:
+            logger.exception("Reset Error")
+            raise e
 
     def step(self, action):
         try:
@@ -142,33 +149,34 @@ class CarlaEnv(gym.Env):
             waypoints = [wp[0] for wp in plan]
             wps = waypoints[:self.waypoints_size]
 
-            # 5. VISUALIZATION
-            if self.episode_step % 2 == 0 and wps:
-                # Visualize the first valid one to ensure it matches
-                self.world.debug.draw_point(
-                    waypoints[0].transform.location + carla.Location(z=2),
-                    size=0.5, color=carla.Color(0, 0, 255), life_time=0.1
-                )
+            # # 5. VISUALIZATION
+            # if self.episode_step % 2 == 0 and wps:
+            #     # Visualize the first valid one to ensure it matches
+            #     self.world.debug.draw_point(
+            #         waypoints[0].transform.location + carla.Location(z=2),
+            #         size=0.5, color=carla.Color(0, 0, 255), life_time=0.1
+            #     )
 
             # 6. OBSERVATION & REWARD
             obs = self.get_obs(wps)
             reward, terminated = self.compute_reward(wps)
 
-            truncated = self.episode_step > 200
+            truncated = self.episode_step > 1000
 
-            info = {"steer": steer, "throttle": throttle}
+            self._render_hud(reward)
+
+            info = {}
             return obs.tolist(), float(reward), bool(terminated), bool(truncated), info
 
         except Exception as e:
-            logging.exception("Step Error")
+            logger.exception("Step Error")
             raise e
 
     def get_obs(self, waypoints):
-        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)
 
+        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)
         steer = self.ego_vehicle.get_control().steer
 
-        # build_state_vector filters stale points and cuts to waypoints_size
         obs = build_state_vector(
             self.ego_vehicle, waypoints, self.waypoints_size, self.lane_width,
             speed, accel, steer, self.max_dist_ahead
@@ -180,36 +188,67 @@ class CarlaEnv(gym.Env):
         reward = 0.0
         terminated = False
 
-        # Collision Check (Using sensor instead of Agent)
-        if len(self.collision_history) > 0:
+        # Collision Check
+        if len(self.collision_history) > 0 and self.episode_step > 50:
             reward -= 100.0
             terminated = True
             return reward, terminated
 
-        # Speed Reward (Alignment with road)
-        vel = self.ego_vehicle.get_velocity()
+        # Speed Reward
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
 
-        if waypoints:
-            # Project speed onto road direction
-            wp_fwd = waypoints[0].transform.rotation.get_forward_vector()
-            speed_projected = vel.x * wp_fwd.x + vel.y * wp_fwd.y
-            reward += speed_projected * 0.2  # Reward forward movement
+        if waypoints and len(waypoints) > 0:
+            # Calculate difference from target
+            speed_diff = abs(speed - 15)
+
+            r_speed = 1.0 - (speed_diff / 15)
+            reward += max(0.0, r_speed)
 
             # Centering
             dist = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
             reward -= dist * 0.1
         else:
-            reward -= 1.0  # Off road/Lost
+            reward -= 2.0  # Off road/Lost signal
 
-        # Anti-Parking
+        # Stopping Penalty
         if speed < 0.5:
-            reward -= 0.5
-        if speed > 20.0:
-            reward -= (speed - 20.0) * 0.2
+            reward -= 1.0  # Stronger penalty for stopping
+
+        # Goal Reached
+        if self.lp.done():
+            reward += 200.0
+            terminated = True
 
         return reward, terminated
 
     def close(self):
         if self.radar_sensor: self.radar_sensor.destroy()
-        if hasattr(self, 'col_sensor') and self.col_sensor: self.col_sensor.destroy()
+        if self.col_sensor: self.col_sensor.destroy()
+
+    def _render_hud(self, reward):
+        # 1. Get Real Control Values (What the car is actually doing)
+        ctrl = self.ego_vehicle.get_control()
+        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+        # 2. Get Car Location to place text
+        loc = self.ego_vehicle.get_location()
+
+        # 3. Define the text lines (Bottom to Top)
+        info_text = [
+            f"Speed: {speed:.1f} m/s",
+            f"Steer: {ctrl.steer:.2f}",
+            f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
+            f"Reward: {reward:.2f}",
+            f"Episode: {self.episode_step}"
+        ]
+
+        # 4. Draw the strings in the world
+        # We stack them vertically by increasing Z
+        for i, line in enumerate(info_text):
+            self.world.debug.draw_string(
+                # Position: 2 meters above car, slightly offset per line
+                carla.Location(x=loc.x, y=loc.y, z=loc.z + 2.0 + (i * 0.5)),
+                line,
+                draw_shadow=True,
+                color=carla.Color(255, 255, 255),  # White text
+                life_time=0.05  # Update every frame (assuming 20fps)
+            )

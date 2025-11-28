@@ -1,7 +1,14 @@
 
 import time
+import logging
 from stable_baselines3 import TD3
 from train import RemoteCarlaEnv
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(stream_handler)
 
 def evaluate(model_path, env, episodes, max_steps):
     # Load environment & model
@@ -12,7 +19,7 @@ def evaluate(model_path, env, episodes, max_steps):
         obs, info = env.reset()
         ep_reward = 0
 
-        print(f"=== Episode {ep + 1} ===")
+        logger.log(logging.INFO, f"=== Episode {ep + 1} ===")
 
         for step in range(max_steps):
             # deterministic=True → no exploration noise during evaluation
@@ -27,18 +34,18 @@ def evaluate(model_path, env, episodes, max_steps):
             if terminated or truncated:
                 break
 
-        print(f"Episode reward: {ep_reward}")
+        logger.log(logging.INFO, f"Episode reward: {ep_reward}")
         mean_reward += ep_reward
 
-    print(f"mean reward over {episodes} is {mean_reward/episodes}")
+    logger.log(logging.INFO,f"mean reward over {episodes} is {mean_reward/episodes}")
 
     env.close()
-    print("Evaluation finished.")
+    logger.log(logging.INFO, "Evaluation finished.")
 
 
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
     start = time.time()
-    evaluate("ddpg_carla_final", env, episodes=5, max_steps=500)
+    evaluate("ddpg_carla_final", env, episodes=5, max_steps=1000)
     end = time.time()
-    print(f"Total evaluation time: {(end - start) / 60} minutes")
+    logger.log(logging.INFO, f"Total evaluation time: {(end - start) / 60} minutes")

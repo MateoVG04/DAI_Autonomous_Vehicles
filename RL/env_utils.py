@@ -1,9 +1,7 @@
 import math
 import numpy as np
 
-# ===============================
 # Helper functions
-# ===============================
 
 def get_vehicle_speed_accel(vehicle):
 
@@ -107,7 +105,7 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     # Lane Centering (Cross-Track Error - CTE)
     # Use the Y component of the immediate *first valid* waypoint (polar_coords[1] is the angle)
     # Since we need the lateral distance (Y), we use the raw Y from the first filtered point.
-    if future_local_coords:
+    if len(future_local_coords) > 0:
         cte_norm = np.clip(future_local_coords[0][1] / MAX_REF_LATERAL, -1, 1)
     else:
         cte_norm = 0.0
