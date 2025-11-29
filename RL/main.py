@@ -46,6 +46,6 @@ def evaluate(model_path, env, episodes, max_steps):
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
     start = time.time()
-    evaluate("ddpg_carla_final", env, episodes=5, max_steps=1000)
+    evaluate("carla_model_300000_2", env, episodes=5, max_steps=1000)
     end = time.time()
     logger.log(logging.INFO, f"Total evaluation time: {(end - start) / 60} minutes")

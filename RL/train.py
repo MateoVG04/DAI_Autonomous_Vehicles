@@ -8,7 +8,7 @@ import wandb
 import logging
 from wandb.integration.sb3 import WandbCallback
 from stable_baselines3 import TD3
-from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
+from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise, NormalActionNoise
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -54,28 +54,25 @@ class RemoteCarlaEnv(gym.Env):
         except:
             pass
 
-def wandb_setup():
+def wandb_setup(timesteps=100_000):
     run = wandb.init(
         project="carla-rl",
         config={
             "policy": "TD3",
-            "timesteps": 100_000,
+            "timesteps": timesteps,
             "env": "CarlaEnv",
         },
         sync_tensorboard=True,
         save_code=True,
     )
+    logger.log(logging.INFO, f"Wandb setup complete, run: {run.id}")
     return run
 
 def train(env, timesteps, run=None):
     n_actions = env.action_space.shape[0]
 
     # for exploration, noise = OU noise
-    action_noise = OrnsteinUhlenbeckActionNoise(
-        mean=np.zeros(n_actions),
-        sigma=0.1 * np.ones(n_actions),  # throttle/brake exploration
-        theta=0.1  # smoothness of changes
-    )
+    action_noise = NormalActionNoise(mean=np.zeros(1), sigma=0.1)
 
     model = TD3(
         "MlpPolicy",
@@ -85,10 +82,11 @@ def train(env, timesteps, run=None):
         tau=0.005,
         action_noise=action_noise,
         verbose=1,
-        buffer_size=500_000,
+        buffer_size=100_000,
         tensorboard_log=f"./run/{run.id}/"
     )
 
+    logger.log(logging.INFO, f"Training...")
     model.learn(
         total_timesteps=timesteps,
         callback=WandbCallback(
@@ -100,13 +98,14 @@ def train(env, timesteps, run=None):
     )
     logger.log(logging.INFO,"Training finished.")
 
-    model.save("ddpg_carla_final")
+    model.save(f"carla_model_{timesteps}_2")
     logger.log(logging.INFO, "Model saved.")
 
 if __name__ == '__main__':
+    timesteps = 300_000
     env = RemoteCarlaEnv()
-    run = wandb_setup()
+    run = wandb_setup(timesteps=timesteps)
     start = time.time()
-    train(env, 100_000, run)
+    train(env=env, timesteps=timesteps, run=run)
     end = time.time()
     logger.log(logging.INFO, f"Training time: {(end - start) // 60} minutes")

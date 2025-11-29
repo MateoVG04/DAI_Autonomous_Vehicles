@@ -131,7 +131,6 @@ class CarlaEnv(gym.Env):
             brake = float(np.clip(-a, 0.0, 1.0)) if a <= 0 else 0.0
 
             # 2. STEERING (From Local Planner)
-            # run_step() updates the internal buffer automatically!
             lp_control = self.lp.run_step()
             steer = lp_control.steer
 
@@ -143,25 +142,22 @@ class CarlaEnv(gym.Env):
             self.episode_step += 1
 
             # 4. GET WAYPOINTS
-            # Grab 50, let build_state_vector filter the ones behind the car
             plan = self.lp.get_plan()
-
             waypoints = [wp[0] for wp in plan]
             wps = waypoints[:self.waypoints_size]
 
-            # # 5. VISUALIZATION
-            # if self.episode_step % 2 == 0 and wps:
-            #     # Visualize the first valid one to ensure it matches
-            #     self.world.debug.draw_point(
-            #         waypoints[0].transform.location + carla.Location(z=2),
-            #         size=0.5, color=carla.Color(0, 0, 255), life_time=0.1
-            #     )
+            # 5. VISUALIZATION
+            if self.episode_step % 2 == 0 and waypoints:
+                # Visualize the first valid one to ensure it matches
+                self.world.debug.draw_point(
+                    waypoints[-1].transform.location + carla.Location(z=2),
+                    size=0.5, color=carla.Color(0, 0, 255), life_time=0.1
+                )
 
             # 6. OBSERVATION & REWARD
             obs = self.get_obs(wps)
             reward, terminated = self.compute_reward(wps)
-
-            truncated = self.episode_step > 1000
+            truncated = self.episode_step > 1500
 
             self._render_hud(reward)
 
@@ -188,9 +184,9 @@ class CarlaEnv(gym.Env):
         reward = 0.0
         terminated = False
 
-        # Collision Check
-        if len(self.collision_history) > 0 and self.episode_step > 50:
-            reward -= 100.0
+        # Collision Check and avoid it at the start
+        if len(self.collision_history) > 0 and self.episode_step > 20:
+            reward -= 200.0
             terminated = True
             return reward, terminated
 
@@ -208,15 +204,15 @@ class CarlaEnv(gym.Env):
             dist = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
             reward -= dist * 0.1
         else:
-            reward -= 2.0  # Off road/Lost signal
+            reward -= 3.0  # Off road/Lost signal
 
         # Stopping Penalty
         if speed < 0.5:
-            reward -= 1.0  # Stronger penalty for stopping
+            reward -= 2.0  # Stronger penalty for stopping
 
         # Goal Reached
         if self.lp.done():
-            reward += 200.0
+            reward += 500.0
             terminated = True
 
         return reward, terminated
