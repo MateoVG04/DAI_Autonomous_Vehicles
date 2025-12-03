@@ -58,22 +58,16 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     # --- 1. Waypoint Filtering & Transformation (Polar) ---
 
     polar_coords = []
-    future_local_coords = []
-
+    local_coords = []
     # First, transform all relevant waypoints and filter out stale/behind points
     for wp in waypoints:
-        local_coords = global_to_local(
+        coords = global_to_local(
             ego_pos, ego_yaw, (wp.transform.location.x, wp.transform.location.y)
         )
-
-        # Filter: Only accept waypoints that are not significantly behind the vehicle center
-        # This prevents the network from being confused by stale points.
-        # if local_coords[0] > -1.0:
-        #     future_local_coords.append(local_coords)
-
+        local_coords.append(coords)
 
     # Now, convert filtered points to Polar Coordinates and normalize
-    for lx, ly in future_local_coords:
+    for lx, ly in local_coords:
         # Distance (r)
         dist = np.sqrt(lx ** 2 + ly ** 2)
 
@@ -103,10 +97,8 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     steering_norm = np.clip(steering, -1, 1)
 
     # Lane Centering (Cross-Track Error - CTE)
-    # Use the Y component of the immediate *first valid* waypoint (polar_coords[1] is the angle)
-    # Since we need the lateral distance (Y), we use the raw Y from the first filtered point.
-    if len(future_local_coords) > 0:
-        cte_norm = np.clip(future_local_coords[0][1] / MAX_REF_LATERAL, -1, 1)
+    if len(local_coords) > 0:
+        cte_norm = np.clip(local_coords[0][1] / MAX_REF_LATERAL, -1, 1)
     else:
         cte_norm = 0.0
 
