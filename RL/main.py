@@ -1,89 +1,51 @@
-import gymnasium as gym
-import Pyro4
-import numpy as np
+
 import time
-from stable_baselines3 import DDPG
-from stable_baselines3.common.noise import NormalActionNoise
-from stable_baselines3.common.callbacks import CheckpointCallback
+import logging
+from stable_baselines3 import TD3
+from train import RemoteCarlaEnv
 
-# Proxy class to interact with the remote Carla environment
-class RemoteCarlaEnv(gym.Env):
-    def __init__(self):
-        super().__init__()
-        # Connect to the remote object published by the server
-        # change port
-        self.remote_env = Pyro4.Proxy("PYRO:carla.environment@localhost:32839") # for now, hardcoded port
-
-        # define spaces due to serialization issues
-        self.action_space = gym.spaces.Box(low=-1.0,high=1.0, shape=(1,), dtype=np.float32)
-
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(33,), dtype=np.float32)
-
-    def step(self, action):
-        action = float(np.array(action).squeeze())
-        obs, reward, done, truncated, info = self.remote_env.step(action)
-        return np.array(obs), reward, done, truncated, info
-
-    def reset(self, seed=None, options=None):
-        obs_list, info = self.remote_env.reset()
-        obs = np.array(obs_list, dtype=np.float32)
-        return obs, info
-
-    def close(self):
-        self.remote_env.close()
-
-
-def train(env, total_timesteps=200_000):
-    n_actions = env.action_space.shape[0]
-    action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
-    model = DDPG(
-        "MlpPolicy",
-        env,
-        learning_rate=1e-4,
-        batch_size=256,
-        tau=0.005,               # soft update
-        action_noise=action_noise,
-        verbose=1,
-        tensorboard_log="./ddpg_carla_tensorboard/"
-    )
-
-    # Save checkpoints every 20k steps
-    checkpoint_callback = CheckpointCallback(save_freq=20_000, save_path="./checkpoints/", name_prefix="ddpg_carla")
-
-    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
-    model.save("ddpg_carla_final")
-    print("Training finished.")
-
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(stream_handler)
 
 def evaluate(model_path, env, episodes, max_steps):
     # Load environment & model
-    model = DDPG.load(model_path, env=env)
+    model = TD3.load(model_path, env=env)
 
+    mean_reward = 0.0
     for ep in range(episodes):
         obs, info = env.reset()
         ep_reward = 0
 
-        print(f"=== Episode {ep + 1} ===")
+        logger.log(logging.INFO, f"=== Episode {ep + 1} ===")
 
         for step in range(max_steps):
             # deterministic=True → no exploration noise during evaluation
             action, _ = model.predict(obs, deterministic=True)
 
-            obs, reward, done, truncated, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
+
             ep_reward += reward
 
-            time.sleep(0.05)  # 50 ms = ~20 FPS, adjust as needed
+            # time.sleep(0.02)  # 50 ms = ~20 FPS, adjust as needed
 
-            if done or truncated:
+            if terminated or truncated:
                 break
 
-        print(f"Episode reward: {ep_reward}")
+        logger.log(logging.INFO, f"Episode reward: {ep_reward}")
+        mean_reward += ep_reward
+
+    logger.log(logging.INFO,f"mean reward over {episodes} is {mean_reward/episodes}")
 
     env.close()
-    print("Evaluation finished.")
+    logger.log(logging.INFO, "Evaluation finished.")
 
 
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
-    # train(env, total_timesteps=500_000)
-    evaluate("ddpg_carla_final", env, episodes=5, max_steps=10_000)
+    start = time.time()
+    evaluate("carla_model_300000_2", env, episodes=5, max_steps=1000)
+    end = time.time()
+    logger.log(logging.INFO, f"Total evaluation time: {(end - start) / 60} minutes")
