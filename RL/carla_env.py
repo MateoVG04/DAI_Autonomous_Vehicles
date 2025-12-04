@@ -41,21 +41,29 @@ class CarlaEnv(gym.Env):
         - _get_obs(waypoints): Constructs the observation vector.
         - _compute_reward(waypoints): Computes the reward based on the current state.
     """
-    def __init__(self, world: carla.World, vehicle: carla.Vehicle):
+    def __init__(self, client: carla.Client):
         """
         Initializes the CARLA Gym Environment.
-        :param world: Carla world instance
-        :param vehicle: Carla vehicle actor to be controlled
+        :param: client: carla.Client, An active CARLA client connected to the simulator.
         """
         super().__init__()
 
         # Carla world and vehicle
-        self.world = world
-        self.ego_vehicle = vehicle
+        self.client = client
+        self.world = self.client.get_world()
+
+        # Configuration
+        self.available_maps = ['Town01', 'Town02', 'Town03']  # Town07 is rural, good for lane keeping
+        self.map_switch_freq = 10  # Switch every 10 episodes
+        self.total_episodes = 0
+
+        # We don't have a vehicle yet!
+        self.ego_vehicle = None
+        self.radar_sensor = None
+        self.col_sensor = None
 
         # Action: [Throttle/Brake] (Steering is handled by LocalPlanner)
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-
 
         self.waypoints_size = 15
         self.lane_width = 3.5
@@ -64,22 +72,6 @@ class CarlaEnv(gym.Env):
         obs_size = self.waypoints_size * 2 + 5
         # Obs space is normalized between -1 and 1
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
-
-        # Global route planner: Calculates the map path once
-        self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=3.0)
-
-        # Local: Follows the path dynamically
-        # sampling_radius = 2.0 ensures smooth curves.
-        self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
-            'sampling_radius': 2.0,
-            'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
-        })
-
-        # Simulation settings
-        settings = self.world.get_settings()
-        settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 0.05
-        self.world.apply_settings(settings)
 
         # Sensors
         self.distance_ahead = 50.0
@@ -90,6 +82,42 @@ class CarlaEnv(gym.Env):
         self.episode_step = 0
 
         logger.log(logging.INFO, "CarlaEnv initialized")
+
+    def _init_world_settings(self):
+        """Re-apply settings after loading a map"""
+        settings = self.world.get_settings()
+        settings.synchronous_mode = True
+        settings.fixed_delta_seconds = 0.05
+        self.world.apply_settings(settings)
+
+    def _setup_vehicle_and_sensors(self):
+        """Spawns ego vehicle and attaches sensors (Run after map load)"""
+        # 1. Clean up old actors if they exist
+        self.cleanup()
+
+        # 2. Spawn Vehicle
+        bp_lib = self.world.get_blueprint_library()
+        vehicle_bp = bp_lib.filter('vehicle.tesla.model3')[0]
+        spawn_points = self.world.get_map().get_spawn_points()
+        spawn_point = random.choice(spawn_points)
+
+        self.ego_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
+        if not self.ego_vehicle:
+            raise RuntimeError("Failed to spawn vehicle")
+
+        # 3. Setup Sensors (Radar/Collision)
+        self._setup_sensors()
+
+        # 4. Setup Planners
+        # Global route planner: Calculates the map path once
+        self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=2.0)
+
+        # Local: Follows the path dynamically
+        self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
+            'target_speed': 50,
+            'sampling_radius': 2.0,
+            'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
+        })
 
     def _setup_sensors(self):
         # Radar
@@ -116,9 +144,10 @@ class CarlaEnv(gym.Env):
     def collision_callback(self, event):
         self.collision_history.append(event)
 
-    def reset(self, seed=None, options=None) -> tuple[Any, dict[Any, Any]]:
+    def reset(self, seed=None, options=None) -> tuple:
         """
         Resets the environment for a new episode.
+        - Increments episode count and switches map if needed.
         - Spawns the vehicle at a random spawn point and sets destination.
         - Calculates the route using the Global Route Planner and resets the Local Planner with the new route.
         - Returns the initial observation.
@@ -131,40 +160,56 @@ class CarlaEnv(gym.Env):
             Exception: Any unexpected runtime error is logged and re-raised for debugging.
         """
         try:
-            # Spawn & Destination
+            self.total_episodes += 1
+
+            # 1. Map Switching
+            if self.total_episodes > 1 and self.total_episodes % self.map_switch_freq == 0:
+                map_index = (self.total_episodes // self.map_switch_freq) % len(self.available_maps)
+                new_map_name = self.available_maps[map_index]
+                logger.info(f"Switching Map to {new_map_name}...")
+
+                self.client.load_world(new_map_name)
+                self.world = self.client.get_world()
+                self._init_world_settings()
+                self._setup_vehicle_and_sensors()
+
+            # 2. Reset Actor State
+            if not self.ego_vehicle or not self.ego_vehicle.is_alive:
+                self._setup_vehicle_and_sensors()
+
             spawn_points = self.world.get_map().get_spawn_points()
             spawn_point = random.choice(spawn_points)
-            destination = random.choice(spawn_points)
 
-            # Apply Physics
             self.ego_vehicle.set_transform(spawn_point)
             self.ego_vehicle.set_simulate_physics(True)
 
-            # Let physics settle and keep the car from moving
-            for _ in range(30):
-                self.world.tick()
-                self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
 
-            # Calculate route and give to local planner
-            route = self.grp.trace_route(spawn_point.location, destination.location)
+            # 3. Settle Physics
+            for _ in range(30):
+                self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
+                self.world.tick()
+
+            self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
+
+            # 4. Route Generation
+            # Smart destination: try to find a point far away
+            dest_tf = random.choice(spawn_points)
+            route = self.grp.trace_route(spawn_point.location, dest_tf.location)
             self.lp.set_global_plan(route)
 
-            # Reset controls
             self.distance_ahead = 50.0
             self.episode_step = 0
             self.collision_history = []
 
-            # Ge the plan and waypoints
+            # 5. Get Observation (Using correct slicing)
             plan = self.lp.get_plan()
             waypoints = [wp[0] for wp in plan]
             wps = waypoints[:self.waypoints_size]
-
-            # Get observation and return
             obs = self._get_obs(wps)
-            return obs.tolist(), {}
 
+            return obs.tolist(), {}
         except Exception as e:
-            logger.exception("Reset Error")
+            logger.exception("Step Error")
             raise e
 
     def step(self, action: list) -> tuple:
@@ -220,7 +265,7 @@ class CarlaEnv(gym.Env):
             # 6. OBSERVATION & REWARD
             obs = self._get_obs(wps)
             reward, terminated = self._compute_reward(wps)
-            truncated = self.episode_step > 1500
+            truncated = self.episode_step > 1000
 
             self._render_hud(reward)
 
@@ -294,13 +339,24 @@ class CarlaEnv(gym.Env):
 
         return reward, terminated
 
+    def cleanup(self):
+        """Destroys current actors"""
+        if self.radar_sensor and self.radar_sensor.is_alive:
+            self.radar_sensor.destroy()
+        if self.col_sensor and self.col_sensor.is_alive:
+            self.col_sensor.destroy()
+        if self.ego_vehicle and self.ego_vehicle.is_alive:
+            self.ego_vehicle.destroy()
+        self.radar_sensor = None
+        self.col_sensor = None
+        self.ego_vehicle = None
+
     def close(self):
         """
-        Cleans up sensors and other resources.
+        Cleans up actors, sensors and other resources.
         :return: None
         """
-        if self.radar_sensor: self.radar_sensor.destroy()
-        if self.col_sensor: self.col_sensor.destroy()
+        self.cleanup()
 
     # Debugging purposes: Render HUD
     def _render_hud(self, reward: float):

@@ -24,37 +24,35 @@ def nameserver():
     Pyro4.naming.startNSloop(host="0.0.0.0", port=9090)
 
 
-def setup():
+def setup() -> carla.Client:
     """
     Setup CARLA client, load world, spawn vehicle, and configure 3rd person camera.
     :return: None
     """
     client = carla.Client('localhost', 2000)
-    client.set_timeout(10.0)
+    client.set_timeout(30.0)
 
-    world = client.load_world("Town01")
-    blueprint_library = world.get_blueprint_library()
+    return client
 
-    bp = blueprint_library.filter('model3')[0]
-    spawn_point = random.choice(world.get_map().get_spawn_points())
-    vehicle = world.spawn_actor(bp, spawn_point)
 
-    # 3rd person camera
-    spectator = world.get_spectator()
+def dynamic_spectator_update(env_instance: 'CarlaEnv', snapshot):
+    """Updates the spectator camera to follow the vehicle currently held by the environment."""
 
-    def update_spectator(snapshot):
+    # CRITICAL: Safely check if the vehicle exists and is active
+    if env_instance.ego_vehicle and env_instance.ego_vehicle.is_alive:
+        spectator = env_instance.world.get_spectator()
+        vehicle = env_instance.ego_vehicle
+
+        # Calculate transform relative to the current vehicle
         transform = vehicle.get_transform()
         spectator_transform = carla.Transform(
             transform.location
-            + transform.get_forward_vector() * -8
-            + carla.Location(z=3),
+            + transform.get_forward_vector() * -8  # 8 meters behind
+            + carla.Location(z=3),  # 3 meters up
             transform.rotation
         )
         spectator.set_transform(spectator_transform)
 
-    world.on_tick(update_spectator)
-
-    return world, vehicle
 
 
 if __name__ == "__main__":
@@ -64,8 +62,11 @@ if __name__ == "__main__":
     logger.log(logging.INFO, "Name Server started on port 9090")
 
     # Carla setup
-    world, vehicle = setup()
-    env = CarlaEnv(world, vehicle)
+    client = setup()
+    env = CarlaEnv(client)
+    world = client.get_world()
+
+    world.on_tick(lambda snapshot: dynamic_spectator_update(env, snapshot))
 
     # Register CARLA env with Name Server
     daemon = Pyro4.Daemon(host="0.0.0.0")  # remote access supported
