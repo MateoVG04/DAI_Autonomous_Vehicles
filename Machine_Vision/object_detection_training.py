@@ -134,8 +134,8 @@ if __name__ == '__main__':
     model = YOLO("yolo11n.pt")  # pre-trained COCO backbone
     select_classes = [0, 1, 5, 6, 9, 10, 15, 16, 17, 20, 22, 25]
     model = train_model(model, select_classes, EPOCHS)
-    show_results(model)
-    show_training_statistics(show_results)
+    results = show_results(model)
+    show_training_statistics(results)
     metrics = validate_model(model, select_classes)
     show_validation_statistics(metrics)
     save_plot_accuracy(model, metrics)
