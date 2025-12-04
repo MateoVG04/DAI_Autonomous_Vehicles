@@ -1,5 +1,7 @@
 import logging
 import random
+from typing import Any
+
 import numpy as np
 import Pyro4
 import carla
@@ -7,9 +9,9 @@ import gymnasium as gym
 
 from agents.navigation.local_planner import LocalPlanner
 from agents.navigation.global_route_planner import GlobalRoutePlanner
-
 from env_utils import build_state_vector, get_vehicle_speed_accel
 
+# Initialize Logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
@@ -18,28 +20,56 @@ logger.addHandler(stream_handler)
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
+    """
+    CARLA Gym Environment for DRL-based Autonomous Driving.
+    This environment uses a CARLA vehicle and world instance to provide a Gym-compatible interface
+    for training DRL agents. The agent controls throttle and brake, while steering is managed by a Local Planner.
+    Observation Space:
+        - Future Waypoints (15 x 2): Local coordinates of the next 15 waypoints.
+        - Speed (1): Current speed of the vehicle (m/s).
+        - Acceleration (1): Current acceleration of the vehicle (m/s²).
+        - Steering (1): Current steering command applied by the agent [-1, 1].
+        - Distance to Object Ahead (1): Distance to the nearest object ahead (m).
+    Action Space:
+        - Throttle/Brake (1): Continuous value in [-1, 1], where positive values indicate throttle
+          and negative values indicate braking.
+    Methods:
+        - reset(): Resets the environment and returns the initial observation.
+        - step(action): Applies the action, advances the simulation, and returns the new observation,
+          reward, termination status, truncation status, and info.
+        - close(): Cleans up sensors and other resources.
+        - _get_obs(waypoints): Constructs the observation vector.
+        - _compute_reward(waypoints): Computes the reward based on the current state.
+    """
     def __init__(self, world: carla.World, vehicle: carla.Vehicle):
+        """
+        Initializes the CARLA Gym Environment.
+        :param world: Carla world instance
+        :param vehicle: Carla vehicle actor to be controlled
+        """
         super().__init__()
 
+        # Carla world and vehicle
         self.world = world
         self.ego_vehicle = vehicle
 
         # Action: [Throttle/Brake] (Steering is handled by LocalPlanner)
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
+
         self.waypoints_size = 15
         self.lane_width = 3.5
 
-        # Obs: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + Dist(1) = 35
+        # Obs space size: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + Dist(1) = 35
         obs_size = self.waypoints_size * 2 + 5
+        # Obs space is normalized between -1 and 1
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
-        # 1. SETUP PLANNERS
-        # Global: Calculates the map path once
+        # Global route planner: Calculates the map path once
         self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=3.0)
 
         # Local: Follows the path dynamically
-        # sampling_radius=2.0 ensures smooth curves. 3.0 is okay, but 2.0 is tighter.
+        # sampling_radius = 2.0 ensures smooth curves.
         self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
             'sampling_radius': 2.0,
             'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
@@ -52,10 +82,11 @@ class CarlaEnv(gym.Env):
         self.world.apply_settings(settings)
 
         # Sensors
-        self.max_dist_ahead = 50.0
+        self.distance_ahead = 50.0
         self.collision_history = []
         self._setup_sensors()
 
+        # Episode tracking
         self.episode_step = 0
 
         logger.log(logging.INFO, "CarlaEnv initialized")
@@ -78,52 +109,84 @@ class CarlaEnv(gym.Env):
     def radar_callback(self, data):
         try:
             depths = [d.depth for d in data]
-            self.max_dist_ahead = float(min(depths)) if depths else 50.0
+            self.distance_ahead = float(min(depths)) if depths else 50.0
         except:
             pass
 
     def collision_callback(self, event):
         self.collision_history.append(event)
 
-    def reset(self, seed=None, options=None):
+    def reset(self, seed=None, options=None) -> tuple[Any, dict[Any, Any]]:
+        """
+        Resets the environment for a new episode.
+        - Spawns the vehicle at a random spawn point and sets destination.
+        - Calculates the route using the Global Route Planner and resets the Local Planner with the new route.
+        - Returns the initial observation.
+
+        :param seed: Random seed for reproducibility (not used)
+        :param options: Additional options (not used)
+        :return: Initial observation as a numpy array and an empty info dict
+
+        :raises
+            Exception: Any unexpected runtime error is logged and re-raised for debugging.
+        """
         try:
-            # 1. Spawn & Dest
+            # Spawn & Destination
             spawn_points = self.world.get_map().get_spawn_points()
             spawn_point = random.choice(spawn_points)
+            destination = random.choice(spawn_points)
 
-            # Simple dest logic: Pick a point far away or random
-            dest_tf = random.choice(spawn_points)
-
-            # 2. Apply Physics
+            # Apply Physics
             self.ego_vehicle.set_transform(spawn_point)
             self.ego_vehicle.set_simulate_physics(True)
 
-            for _ in range(50):  # Let physics settle
+            # Let physics settle and keep the car from moving
+            for _ in range(30):
                 self.world.tick()
-                self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=0.0))
+                self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, brake=1.0))
 
-            # 3. CALCULATE ROUTE & FEED LOCAL PLANNER
-            route = self.grp.trace_route(spawn_point.location, dest_tf.location)
+            # Calculate route and give to local planner
+            route = self.grp.trace_route(spawn_point.location, destination.location)
             self.lp.set_global_plan(route)
 
             # Reset controls
-            self.max_dist_ahead = 50.0
+            self.distance_ahead = 50.0
             self.episode_step = 0
             self.collision_history = []
 
-            # 4. GET OBSERVATION
+            # Ge the plan and waypoints
             plan = self.lp.get_plan()
-
             waypoints = [wp[0] for wp in plan]
             wps = waypoints[:self.waypoints_size]
 
-            obs = self.get_obs(wps)
+            # Get observation and return
+            obs = self._get_obs(wps)
             return obs.tolist(), {}
+
         except Exception as e:
             logger.exception("Reset Error")
             raise e
 
-    def step(self, action):
+    def step(self, action: list) -> tuple:
+        """
+        Execute one simulation step in the CARLA environment.
+        - Gets action (throttle/brake) from the agent and steering from the Local Planner.
+        - Applies the given action (throttle/brake) to the vehicle.
+        - Advances the simulation by one tick.
+        - Retrieves the next waypoints from the Local Planner.
+        - Computes the observation, reward, and termination status.
+
+        :param action: List containing a single float value in [-1, 1] for throttle/brake.
+        :return: Tuple containing:
+            - observation (np.ndarray): The next observation after the action.
+            - reward (float): The reward obtained from this step.
+            - terminated (bool): Whether the episode has terminated.
+            - truncated (bool): Whether the episode has been truncated.
+            - info (dict): Additional information.
+
+        :raises
+            Exception: Any unexpected runtime error is logged and re-raised for debugging.
+        """
         try:
             # 1. ACTION
             a = float(np.array(action).squeeze())
@@ -148,15 +211,15 @@ class CarlaEnv(gym.Env):
 
             # 5. VISUALIZATION
             if self.episode_step % 2 == 0 and waypoints:
-                # Visualize the first valid one to ensure it matches
+                # Visualize the last waypoint to see destination reached
                 self.world.debug.draw_point(
                     waypoints[-1].transform.location + carla.Location(z=2),
                     size=0.5, color=carla.Color(0, 0, 255), life_time=0.1
                 )
 
             # 6. OBSERVATION & REWARD
-            obs = self.get_obs(wps)
-            reward, terminated = self.compute_reward(wps)
+            obs = self._get_obs(wps)
+            reward, terminated = self._compute_reward(wps)
             truncated = self.episode_step > 1500
 
             self._render_hud(reward)
@@ -168,24 +231,38 @@ class CarlaEnv(gym.Env):
             logger.exception("Step Error")
             raise e
 
-    def get_obs(self, waypoints):
+    def _get_obs(self, waypoints: list) -> np.ndarray:
+        """
+        Gets the current observation for the DRL agent.
+        :param waypoints: The next waypoints from the Local Planner
+        :return: Observation as a numpy array
+        """
 
         speed, accel = get_vehicle_speed_accel(self.ego_vehicle)
         steer = self.ego_vehicle.get_control().steer
 
         obs = build_state_vector(
             self.ego_vehicle, waypoints, self.waypoints_size, self.lane_width,
-            speed, accel, steer, self.max_dist_ahead
+            speed, accel, steer, self.distance_ahead
         )
 
         return np.array(obs, dtype=np.float32)
 
-    def compute_reward(self, waypoints):
+    def _compute_reward(self, waypoints: list) -> tuple:
+        """
+        Computes the reward for the current state.
+        - Penalizes collisions heavily.
+        - Encourages maintaining a target speed of 15 m/s and centering vehicle in lane.
+        - Penalizes stopping and going off-road.
+        - Rewards reaching the goal greatly.
+        :param waypoints: The next waypoints from the Local Planner
+        :return: Tuple of (reward: float, terminated: bool)
+        """
         reward = 0.0
         terminated = False
 
         # Collision Check and avoid it at the start
-        if len(self.collision_history) > 0 and self.episode_step > 20:
+        if len(self.collision_history) > 0 and self.episode_step > 30:
             reward -= 200.0
             terminated = True
             return reward, terminated
@@ -204,7 +281,7 @@ class CarlaEnv(gym.Env):
             dist = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
             reward -= dist * 0.1
         else:
-            reward -= 3.0  # Off road/Lost signal
+            reward -= 3.0  # Off-road/Lost signal
 
         # Stopping Penalty
         if speed < 0.5:
@@ -218,10 +295,15 @@ class CarlaEnv(gym.Env):
         return reward, terminated
 
     def close(self):
+        """
+        Cleans up sensors and other resources.
+        :return: None
+        """
         if self.radar_sensor: self.radar_sensor.destroy()
         if self.col_sensor: self.col_sensor.destroy()
 
-    def _render_hud(self, reward):
+    # Debugging purposes: Render HUD
+    def _render_hud(self, reward: float):
         # 1. Get Real Control Values (What the car is actually doing)
         ctrl = self.ego_vehicle.get_control()
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)

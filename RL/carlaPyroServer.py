@@ -4,8 +4,11 @@ import threading
 import carla
 import random
 import logging
+from carla_env import CarlaEnv
 
-from carlaEnvironment import CarlaEnv
+"""
+Carla Pyro4 Server. Starts a Pyro4 Name Server and registers a CARLA environment for remote access.
+"""
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -14,10 +17,18 @@ stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(leveln
 logger.addHandler(stream_handler)
 
 def nameserver():
+    """
+    Start a Pyro4 Name Server to allow remote object lookup.
+    :return: None
+    """
     Pyro4.naming.startNSloop(host="0.0.0.0", port=9090)
 
 
 def setup():
+    """
+    Setup CARLA client, load world, spawn vehicle, and configure 3rd person camera.
+    :return: None
+    """
     client = carla.Client('localhost', 2000)
     client.set_timeout(10.0)
 

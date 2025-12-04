@@ -1,8 +1,11 @@
-
 import time
 import logging
 from stable_baselines3 import TD3
 from train import RemoteCarlaEnv
+
+"""
+Evaluate a trained TD3 agent on the remote CARLA environment.
+"""
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -10,7 +13,15 @@ stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(stream_handler)
 
-def evaluate(model_path, env, episodes, max_steps):
+def evaluate(model_path: str, env: RemoteCarlaEnv, episodes: int, max_steps: int) -> None:
+    """
+    Evaluate a trained TD3 model in the given environment.
+    :param model_path: The path to the trained model file.
+    :param env: The environment to evaluate in.
+    :param episodes: The number of episodes to run.
+    :param max_steps: The maximum number of steps per episode.
+    :return: None
+    """
     # Load environment & model
     model = TD3.load(model_path, env=env)
 

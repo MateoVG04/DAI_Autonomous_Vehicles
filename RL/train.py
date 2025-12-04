@@ -1,7 +1,4 @@
 import os
-
-import gymnasium as gym
-import Pyro4
 import numpy as np
 import time
 import wandb
@@ -9,6 +6,12 @@ import logging
 from wandb.integration.sb3 import WandbCallback
 from stable_baselines3 import TD3
 from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise, NormalActionNoise
+from carla_remote_env import RemoteCarlaEnv
+
+"""
+Train a TD3 agent on a remote Carla environment via Pyro4.
+A remote Carla environment server must be running before executing this script.
+"""
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -18,43 +21,12 @@ logger.addHandler(stream_handler)
 
 os.environ["WANDB_API_KEY"] = "232f438f252e30a2b8726b6acc2920339a1bbadd"
 
-# Proxy class to interact with the remote Carla environment
-class RemoteCarlaEnv(gym.Env):
-    def __init__(self):
-        super().__init__()
-
-        # Establish Pyro4 connection to remote Carla environment
-        self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
-
-        # Test connection and get observation dimension
-        logger.log(logging.INFO,"Checking remote connection...")
-        dummy_obs, _ = self.remote_env.reset()
-        obs_dim = len(dummy_obs)
-        logger.log(logging.INFO, f"Detected Remote Observation Dim: {obs_dim}")
-
-        # Define action and observation spaces
-        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
-
-    def step(self, action):
-        action = float(np.array(action).squeeze())
-        obs, reward, terminated, truncated, info = self.remote_env.step(action)
-
-        return np.array(obs, dtype=np.float32), reward, terminated, truncated, info
-
-    def reset(self, seed=None, options=None):
-        obs_list, info = self.remote_env.reset()
-        obs = np.array(obs_list, dtype=np.float32)
-
-        return obs, info
-
-    def close(self):
-        try:
-            self.remote_env.close()
-        except:
-            pass
-
-def wandb_setup(timesteps=100_000):
+def wandb_setup(timesteps=100_000) -> wandb.sdk.wandb_run.Run:
+    """
+    Setup wandb logging for the training run.
+    :param timesteps: Number of training timesteps.
+    :return: wandb run object.
+    """
     run = wandb.init(
         project="carla-rl",
         config={
@@ -68,11 +40,18 @@ def wandb_setup(timesteps=100_000):
     logger.log(logging.INFO, f"Wandb setup complete, run: {run.id}")
     return run
 
-def train(env, timesteps, run=None):
+def train(env: RemoteCarlaEnv, timesteps: int, run=None) -> None:
+    """
+    Train the TD3 agent on the given environment.
+    :param env: Carla Gym environment.
+    :param timesteps: Amount of training timesteps.
+    :param run: Wandb run object for logging.
+    :return: None
+    """
     n_actions = env.action_space.shape[0]
 
     # for exploration, noise = OU noise
-    action_noise = NormalActionNoise(mean=np.zeros(1), sigma=0.1)
+    action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1)
 
     model = TD3(
         "MlpPolicy",
