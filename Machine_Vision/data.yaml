@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 27
+names: ['90', 'Green light', 'Right Arrow', 'Straight and Right Arrow', 'StraightArrow', 'Yellow light', 'bicycle', 'bird', 'briage', 'bus', 'car', 'edge lane', 'lanes', 'left arrow', 'middle lane', 'motor', 'motorbike', 'person', 'pole', 'pottedplant', 'red light', 'road', 'stop', 'straight and left arrow', 'traffic light', 'truck', 'walk way']
+
+roboflow:
+  workspace: sam-nobody
+  project: carla-h7zrg
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/sam-nobody/carla-h7zrg/dataset/1
