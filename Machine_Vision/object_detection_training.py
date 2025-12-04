@@ -6,7 +6,7 @@ import pandas as pd
 from ultralytics import YOLO
 
 
-def train_model(model, select_classes):
+def train_model(model, select_classes, epochs):
     """
 
     :param model:
@@ -15,7 +15,7 @@ def train_model(model, select_classes):
     """
     model.train(
         data="C:\\Users\\Khatc\\Desktop\\DistributedAI\\Project\\Code_Train\\dataset\\Carla.v1i.yolov11_using\\data.yaml",
-        epochs=50,
+        epochs=epochs,
         imgsz=640,
         batch=16,
         classes=select_classes,
@@ -130,9 +130,10 @@ def create_subset_confusion_matrix(model, select_classes):
     plt.show()
 
 if __name__ == '__main__':
+    EPOCHS = 1
     model = YOLO("yolo11n.pt")  # pre-trained COCO backbone
     select_classes = [0, 1, 5, 6, 9, 10, 15, 16, 17, 20, 22, 24, 25]
-    model = train_model(model, select_classes)
+    model = train_model(model, select_classes, EPOCHS)
     show_results(model)
     show_training_statistics(show_results)
     metrics = validate_model(model, select_classes)
