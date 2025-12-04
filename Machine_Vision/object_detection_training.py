@@ -1,10 +1,15 @@
 import os
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from ultralytics import YOLO
+import wandb
+from wandb.integration.ultralytics import add_wandb_callback
 
+# add your personal wandb API key in your .env file
+wandb.login(key=os.getenv("WANDB_API_KEY"))
 
 def train_model(model, select_classes, epochs):
     """
@@ -31,7 +36,7 @@ def show_results(model):
     print(results)
     return results
 
-def show_training_statistics(results):
+def show_training_statistics(model,results):
     for i, r in enumerate(results):
         # Volledig pad van de afbeelding
         img_path = r.path  # of r.orig_path als .path niet bestaat
@@ -46,8 +51,33 @@ def show_training_statistics(results):
         print("  class ids  :", unique_ids)
         print("  class names:", class_names)
 
-def validate_model(model, select_classes):
-    model = YOLO(r"C:\Users\Khatc\Desktop\DistributedAI\Project\Code_Train\runs\detect\train3\weights\best.pt")
+def get_latest_best_weights(runs_detect_dir: str) -> str:
+    # runs_detect_dir = r"...\runs\detect"
+    subdirs = [
+        d for d in os.listdir(runs_detect_dir)
+        if os.path.isdir(os.path.join(runs_detect_dir, d))
+    ]
+    if not subdirs:
+        raise RuntimeError(f"No subdirectories found in {runs_detect_dir}")
+
+    # Pick the subdir with the most recent modification time
+    latest_subdir = max(
+        subdirs,
+        key=lambda d: os.path.getmtime(os.path.join(runs_detect_dir, d))
+    )
+
+    best_path = os.path.join(runs_detect_dir, latest_subdir, "weights", "best.pt")
+    if not os.path.exists(best_path):
+        raise FileNotFoundError(f"No best.pt found in any run under {runs_detect_dir}")
+    return best_path
+
+def validate_model(select_classes,specific_model:Optional[int]=None):
+    runs_detect_dir = r"C:\Users\Khatc\Desktop\DistributedAI\Project\Code_Train\runs\detect"
+    path = get_latest_best_weights(runs_detect_dir)
+    if specific_model is not None:
+        path = r"C:\Users\Khatc\Desktop\DistributedAI\Project\Code_Train\runs\detect\train"+str(specific_model)+"\\weights\\best.pt"
+    model = YOLO(path)
+    add_wandb_callback(model, enable_model_checkpointing=True)
 
     metrics = model.val(
         data=r"C:\Users\Khatc\Desktop\DistributedAI\Project\Code_Train\dataset\Carla.v1i.yolov11_using\data.yaml",
@@ -82,7 +112,7 @@ def save_plot_accuracy(model, metrics):
     print("Saved plot to map_per_class.png")
     plt.show()
 
-def create_subset_confusion_matrix(model, select_classes):
+def create_subset_confusion_matrix(model, metrics, select_classes):
     cm_full = metrics.confusion_matrix.matrix  # dit is meestal een torch.Tensor
 
     # Naar numpy omzetten (als het een tensor is)
@@ -131,12 +161,15 @@ def create_subset_confusion_matrix(model, select_classes):
 
 if __name__ == '__main__':
     EPOCHS = 1
-    model = YOLO("yolo11n.pt")  # pre-trained COCO backbone
-    select_classes = [0, 1, 5, 6, 9, 10, 15, 16, 17, 20, 22, 25]
-    model = train_model(model, select_classes, EPOCHS)
+    with wandb.init(project="ultralytics_train_carla_DAI", job_type="train") as run1:
+        model = YOLO("yolo11n.pt")  # pre-trained COCO backbone
+        add_wandb_callback(model, enable_model_checkpointing=True)
+        select_classes = [0, 1, 5, 6, 9, 10, 15, 16, 17, 20, 22, 25]
+        model = train_model(model, select_classes, EPOCHS)
     results = show_results(model)
-    show_training_statistics(results)
-    metrics = validate_model(model, select_classes)
+    show_training_statistics(model,results)
+    with wandb.init(project="ultralytics_val_carla_DAI", job_type="inference") as run2:
+        metrics = validate_model(select_classes,specific_model=None)
     show_validation_statistics(metrics)
     save_plot_accuracy(model, metrics)
-    create_subset_confusion_matrix(model, select_classes)
+    create_subset_confusion_matrix(model,metrics,select_classes)
