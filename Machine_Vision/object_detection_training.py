@@ -132,7 +132,7 @@ def create_subset_confusion_matrix(model, select_classes):
 if __name__ == '__main__':
     EPOCHS = 1
     model = YOLO("yolo11n.pt")  # pre-trained COCO backbone
-    select_classes = [0, 1, 5, 6, 9, 10, 15, 16, 17, 20, 22, 24, 25]
+    select_classes = [0, 1, 5, 6, 9, 10, 15, 16, 17, 20, 22, 25]
     model = train_model(model, select_classes, EPOCHS)
     show_results(model)
     show_training_statistics(show_results)
