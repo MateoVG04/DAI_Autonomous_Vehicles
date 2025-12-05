@@ -2,7 +2,6 @@ import Pyro4
 import Pyro4.naming
 import threading
 import carla
-import random
 import logging
 from carla_env import CarlaEnv
 

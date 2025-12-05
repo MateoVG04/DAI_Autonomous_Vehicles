@@ -61,7 +61,7 @@ def train(env: RemoteCarlaEnv, timesteps: int, run=None) -> None:
         tau=0.005,
         action_noise=action_noise,
         verbose=1,
-        buffer_size=100_000,
+        buffer_size=200_000,
         tensorboard_log=f"./run/{run.id}/"
     )
 
@@ -77,11 +77,11 @@ def train(env: RemoteCarlaEnv, timesteps: int, run=None) -> None:
     )
     logger.log(logging.INFO,"Training finished.")
 
-    model.save(f"carla_model_{timesteps}_2")
+    model.save(f"carla_model_{timesteps}_multiMap")
     logger.log(logging.INFO, "Model saved.")
 
 if __name__ == '__main__':
-    timesteps = 300_000
+    timesteps = 500_000
     env = RemoteCarlaEnv()
     run = wandb_setup(timesteps=timesteps)
     start = time.time()

@@ -1,7 +1,5 @@
 import logging
 import random
-from typing import Any
-
 import numpy as np
 import Pyro4
 import carla
@@ -17,6 +15,11 @@ logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(stream_handler)
+
+# Constants
+EPISODES = 1500
+WAIT_TICKS = 15
+
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -52,34 +55,35 @@ class CarlaEnv(gym.Env):
         self.client = client
         self.world = self.client.get_world()
 
-        # Configuration
-        self.available_maps = ['Town01', 'Town02', 'Town03']  # Town07 is rural, good for lane keeping
-        self.map_switch_freq = 10  # Switch every 10 episodes
+        # map configuration
+        self.maps = ['Town01', 'Town02', 'Town03']
+        self.map_switch_freq = 20  # Switch every 20 episodes
         self.total_episodes = 0
 
-        # We don't have a vehicle yet!
+        # Setup vehicle and sensors
         self.ego_vehicle = None
         self.radar_sensor = None
         self.col_sensor = None
 
+        # Planners
+        self.grp = None
+        self.lp = None
+
         # Action: [Throttle/Brake] (Steering is handled by LocalPlanner)
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
-
         self.waypoints_size = 15
         self.lane_width = 3.5
 
         # Obs space size: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + Dist(1) = 35
         obs_size = self.waypoints_size * 2 + 5
-        # Obs space is normalized between -1 and 1
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
+        self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
-        # Sensors
         self.distance_ahead = 50.0
         self.collision_history = []
-        self._setup_sensors()
-
-        # Episode tracking
         self.episode_step = 0
+
+        self._init_world_settings()
+        self._setup_vehicle_and_sensors()
 
         logger.log(logging.INFO, "CarlaEnv initialized")
 
@@ -92,7 +96,6 @@ class CarlaEnv(gym.Env):
 
     def _setup_vehicle_and_sensors(self):
         """Spawns ego vehicle and attaches sensors (Run after map load)"""
-        # 1. Clean up old actors if they exist
         self.cleanup()
 
         # 2. Spawn Vehicle
@@ -114,7 +117,7 @@ class CarlaEnv(gym.Env):
 
         # Local: Follows the path dynamically
         self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
-            'target_speed': 50,
+            'target_speed': 54, # km/h
             'sampling_radius': 2.0,
             'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
         })
@@ -138,8 +141,7 @@ class CarlaEnv(gym.Env):
         try:
             depths = [d.depth for d in data]
             self.distance_ahead = float(min(depths)) if depths else 50.0
-        except:
-            pass
+        except: pass
 
     def collision_callback(self, event):
         self.collision_history.append(event)
@@ -164,8 +166,8 @@ class CarlaEnv(gym.Env):
 
             # 1. Map Switching
             if self.total_episodes > 1 and self.total_episodes % self.map_switch_freq == 0:
-                map_index = (self.total_episodes // self.map_switch_freq) % len(self.available_maps)
-                new_map_name = self.available_maps[map_index]
+                map_index = (self.total_episodes // self.map_switch_freq) % len(self.maps)
+                new_map_name = self.maps[map_index]
                 logger.info(f"Switching Map to {new_map_name}...")
 
                 self.client.load_world(new_map_name)
@@ -184,12 +186,12 @@ class CarlaEnv(gym.Env):
             self.ego_vehicle.set_simulate_physics(True)
 
 
+            self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
             # 3. Settle Physics
-            for _ in range(30):
+            for _ in range(WAIT_TICKS):
                 self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
                 self.world.tick()
 
-            self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
 
             # 4. Route Generation
             # Smart destination: try to find a point far away
@@ -265,12 +267,11 @@ class CarlaEnv(gym.Env):
             # 6. OBSERVATION & REWARD
             obs = self._get_obs(wps)
             reward, terminated = self._compute_reward(wps)
-            truncated = self.episode_step > 1000
+            truncated = self.episode_step > EPISODES
 
             self._render_hud(reward)
 
-            info = {}
-            return obs.tolist(), float(reward), bool(terminated), bool(truncated), info
+            return obs.tolist(), float(reward), bool(terminated), bool(truncated), {}
 
         except Exception as e:
             logger.exception("Step Error")
@@ -307,20 +308,24 @@ class CarlaEnv(gym.Env):
         terminated = False
 
         # Collision Check and avoid it at the start
-        if len(self.collision_history) > 0 and self.episode_step > 30:
-            reward -= 200.0
-            terminated = True
-            return reward, terminated
+        if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
+            return -200.0, True # Heavy penalty for collision
 
         # Speed Reward
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
 
-        if waypoints and len(waypoints) > 0:
-            # Calculate difference from target
-            speed_diff = abs(speed - 15)
+        target_speed = 15.0  # m/s
 
-            r_speed = 1.0 - (speed_diff / 15)
+        if waypoints and len(waypoints) > 0:
+
+            # Calculate difference from target
+            speed_diff = abs(speed - target_speed)
+            r_speed = 1.0 - (speed_diff / target_speed)
             reward += max(0.0, r_speed)
+
+            # Bell curve
+            # r_speed = np.exp(-0.1 * speed_diff ** 2)  # Bell curve
+            # reward += r_speed
 
             # Centering
             dist = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
@@ -347,9 +352,6 @@ class CarlaEnv(gym.Env):
             self.col_sensor.destroy()
         if self.ego_vehicle and self.ego_vehicle.is_alive:
             self.ego_vehicle.destroy()
-        self.radar_sensor = None
-        self.col_sensor = None
-        self.ego_vehicle = None
 
     def close(self):
         """
