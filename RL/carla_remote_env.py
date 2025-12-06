@@ -49,8 +49,8 @@ class RemoteCarlaEnv(gym.Env):
                 self.remote_env._pyroBind() # Test connection
                 logger.log(logging.INFO, "✅ Connected to CARLA Server.")
                 return
-            except (Exception):
-                logger.log(logging.INFO,"Waiting for CARLA Server...", end="\r")
+            except Exception:
+                logger.log(logging.INFO,"Waiting for CARLA Server...")
                 time.sleep(5)
 
     def reset(self, seed=None, options=None):
@@ -70,7 +70,7 @@ class RemoteCarlaEnv(gym.Env):
             obs, reward, terminated, truncated, info = self.remote_env.step(action)
 
             return np.array(obs, dtype=np.float32), reward, terminated, truncated, info
-        except:
+        except Exception:
             logger.log(logging.WARNING,"Connection lost during STEP. Waiting for server restart...")
             self.connect()
             return self.reset()
