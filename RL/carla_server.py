@@ -9,6 +9,8 @@ from carla_env import CarlaEnv
 Carla Pyro4 Server. Starts a Pyro4 Name Server and registers a CARLA environment for remote access.
 """
 
+CARLA_TIMEOUT = 120.0  # seconds
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
@@ -29,12 +31,12 @@ def setup() -> carla.Client:
     :return: None
     """
     client = carla.Client('localhost', 2000)
-    client.set_timeout(30.0)
+    client.set_timeout(CARLA_TIMEOUT)
 
     return client
 
 
-def dynamic_spectator_update(env_instance: 'CarlaEnv', snapshot):
+def spectator_update(env_instance: 'CarlaEnv', snapshot):
     """Updates the spectator camera to follow the vehicle currently held by the environment."""
 
     # CRITICAL: Safely check if the vehicle exists and is active
@@ -65,7 +67,7 @@ if __name__ == "__main__":
     env = CarlaEnv(client)
     world = client.get_world()
 
-    world.on_tick(lambda snapshot: dynamic_spectator_update(env, snapshot))
+    world.on_tick(lambda snapshot: spectator_update(env, snapshot))
 
     # Register CARLA env with Name Server
     daemon = Pyro4.Daemon(host="0.0.0.0")  # remote access supported

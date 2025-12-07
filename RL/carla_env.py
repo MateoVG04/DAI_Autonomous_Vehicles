@@ -186,7 +186,7 @@ class CarlaEnv(gym.Env):
             self.ego_vehicle.set_simulate_physics(True)
 
 
-            self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
+            self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0, hand_brake=True))
             # 3. Settle Physics
             for _ in range(WAIT_TICKS):
                 self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
