@@ -47,7 +47,7 @@ class RemoteCarlaEnv(gym.Env):
             try:
                 self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
                 self.remote_env._pyroBind() # Test connection
-                logger.log(logging.INFO, "✅ Connected to CARLA Server.")
+                logger.log(logging.INFO, "Connected to CARLA Server.")
                 return
             except Exception:
                 logger.log(logging.INFO,"Waiting for CARLA Server...")

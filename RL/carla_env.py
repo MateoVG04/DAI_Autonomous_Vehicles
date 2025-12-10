@@ -55,7 +55,7 @@ class CarlaEnv(gym.Env):
         self.client = client
         self.world = self.client.get_world()
 
-        # map configuration
+        # Map configuration
         self.maps = ['Town01', 'Town02', 'Town03']
         self.map_switch_freq = 20  # Switch every 20 episodes
         self.total_episodes = 0
@@ -74,7 +74,7 @@ class CarlaEnv(gym.Env):
         self.waypoints_size = 15
         self.lane_width = 3.5
 
-        # Obs space size: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + Dist(1) = 35
+        # Obs space size: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + DistAhead(1) = 35
         obs_size = self.waypoints_size * 2 + 5
         self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
@@ -123,28 +123,72 @@ class CarlaEnv(gym.Env):
         })
 
     def _setup_sensors(self):
-        # Radar
-        bp_radar = self.world.get_blueprint_library().find('sensor.other.radar')
-        bp_radar.set_attribute('horizontal_fov', '30')
-        bp_radar.set_attribute('range', '50')
-        self.radar_sensor = self.world.spawn_actor(
-            bp_radar, carla.Transform(carla.Location(x=2.5, z=1.0)), attach_to=self.ego_vehicle)
-        self.radar_sensor.listen(self.radar_callback)
 
-        # Collision (Replaces SteeringAgent check)
+        # Collision
         bp_col = self.world.get_blueprint_library().find('sensor.other.collision')
         self.col_sensor = self.world.spawn_actor(
             bp_col, carla.Transform(), attach_to=self.ego_vehicle)
         self.col_sensor.listen(self.collision_callback)
 
-    def radar_callback(self, data):
-        try:
-            depths = [d.depth for d in data]
-            self.distance_ahead = float(min(depths)) if depths else 50.0
-        except: pass
-
     def collision_callback(self, event):
         self.collision_history.append(event)
+
+    def _get_gt_distance(self, range_limit=50.0):
+        """
+        Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
+        """
+        if not self.ego_vehicle:
+            return range_limit
+
+        # 1. Get Ego Transform
+        ego_tf = self.ego_vehicle.get_transform()
+        ego_loc = ego_tf.location
+        ego_fwd = ego_tf.get_forward_vector()
+        ego_right = ego_tf.get_right_vector()
+
+        # 2. Get all other vehicles
+        vehicles = self.world.get_actors().filter('vehicle.*')
+
+        closest_dist = range_limit
+
+        for target in vehicles:
+            if target.id == self.ego_vehicle.id:
+                continue  # Skip ourselves
+
+            target_loc = target.get_transform().location
+
+            # Optimization: Quick Euclidian check to skip far cars
+            if ego_loc.distance(target_loc) > range_limit:
+                continue
+
+            # 3. Vector Math: Calculate relative position
+            # Vector from Ego -> Target
+            vec_to_target = carla.Vector3D(
+                target_loc.x - ego_loc.x,
+                target_loc.y - ego_loc.y,
+                target_loc.z - ego_loc.z
+            )
+
+            # Project onto Forward Vector (How far ahead?)
+            # Dot Product: A . B
+            forward_dist = (vec_to_target.x * ego_fwd.x) + \
+                           (vec_to_target.y * ego_fwd.y)
+
+            # Project onto Right Vector (How far sideways?)
+            # Dot Product with Right Vector gives lateral offset
+            lateral_dist = (vec_to_target.x * ego_right.x) + \
+                           (vec_to_target.y * ego_right.y)
+
+            # 4. Check if it's in our "Corridor"
+            # - Must be in front (forward_dist > 0)
+            # - Must be closer than current closest (forward_dist < closest_dist)
+            # - Must be in our lane (abs(lateral_dist) < half_lane_width)
+            #   Assuming lane width ~3.5m, half is 1.75m. We use 1.5m to be strict.
+            if 0 < forward_dist < closest_dist:
+                if abs(lateral_dist) < 1.75:
+                    closest_dist = forward_dist
+
+        return closest_dist
 
     def reset(self, seed=None, options=None) -> tuple:
         """
@@ -185,7 +229,6 @@ class CarlaEnv(gym.Env):
             self.ego_vehicle.set_transform(spawn_point)
             self.ego_vehicle.set_simulate_physics(True)
 
-
             self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0, hand_brake=True))
             # 3. Settle Physics
             for _ in range(WAIT_TICKS):
@@ -199,7 +242,7 @@ class CarlaEnv(gym.Env):
             route = self.grp.trace_route(spawn_point.location, dest_tf.location)
             self.lp.set_global_plan(route)
 
-            self.distance_ahead = 50.0
+            self.distance_ahead = self._get_gt_distance()
             self.episode_step = 0
             self.collision_history = []
 
@@ -240,7 +283,7 @@ class CarlaEnv(gym.Env):
             throttle = float(np.clip(a, 0.0, 1.0)) if a > 0 else 0.0
             brake = float(np.clip(-a, 0.0, 1.0)) if a <= 0 else 0.0
 
-            # 2. STEERING (From Local Planner)
+            # 2. STEERING
             lp_control = self.lp.run_step()
             steer = lp_control.steer
 
@@ -251,10 +294,11 @@ class CarlaEnv(gym.Env):
             self.world.tick()
             self.episode_step += 1
 
-            # 4. GET WAYPOINTS
+            # 4. GET WAYPOINTS & DISTANCE
             plan = self.lp.get_plan()
             waypoints = [wp[0] for wp in plan]
             wps = waypoints[:self.waypoints_size]
+            self.distance_ahead = self._get_gt_distance()
 
             # 5. VISUALIZATION
             if self.episode_step % 2 == 0 and waypoints:
@@ -298,46 +342,88 @@ class CarlaEnv(gym.Env):
         """
         Computes the reward for the current state.
         - Penalizes collisions heavily.
-        - Encourages maintaining a target speed of 15 m/s and centering vehicle in lane.
+        - Encourages going the speed limit and staying in lane.
+        - Encourages safe following distance.
+        - Encourages smooth driving (low G-forces).
         - Penalizes stopping and going off-road.
         - Rewards reaching the goal greatly.
         :param waypoints: The next waypoints from the Local Planner
         :return: Tuple of (reward: float, terminated: bool)
         """
+
         reward = 0.0
         terminated = False
 
-        # Collision Check and avoid it at the start
+        # 1. CRITICAL: Collision
+        # Increased wait ticks slightly to prevent spawn-physics collisions
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
-            return -200.0, True # Heavy penalty for collision
+            return -200.0, True
 
-        # Speed Reward
-        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+        # 2. Get Data
+        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
 
-        target_speed = 15.0  # m/s
+        # Get Dynamic Speed Limit
+        speed_limit_kmh = self.ego_vehicle.get_speed_limit()
+        target_speed = speed_limit_kmh / 3.6
+        # Safety fallback: Ensure target is never 0 to prevent division errors
+        target_speed = max(5.0, target_speed)
 
-        if waypoints and len(waypoints) > 0:
+        # 3. ACC Safe Following Logic
+        # 2-second rule + 10m buffer
+        safe_distance = max(10.0, speed * 2.0)
 
-            # Calculate difference from target
-            speed_diff = abs(speed - target_speed)
-            r_speed = 1.0 - (speed_diff / target_speed)
-            reward += max(0.0, r_speed)
+        # Use Ground Truth distance (Noise-free)
+        dist_to_lead = self.distance_ahead
 
-            # Bell curve
-            # r_speed = np.exp(-0.1 * speed_diff ** 2)  # Bell curve
-            # reward += r_speed
+        if waypoints:
+            # --- CASE A: GAP VIOLATION (Overrides Speed Limit) ---
+            if dist_to_lead < safe_distance:
+                # Calculate how bad the violation is
+                violation_ratio = 1.0 - (dist_to_lead / safe_distance)
 
-            # Centering
-            dist = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
-            reward -= dist * 0.1
+                # Penalty scales with violation severity
+                # If dist is 50% of safe distance, penalty is -0.5
+                reward -= violation_ratio * 1.0
+
+                # PANIC: If we are too close AND moving fast relative to lead logic
+                # (Simplified: if we are close and fast)
+                if dist_to_lead < 10.0 and speed > 5.0:
+                    reward -= 2.0
+
+                    # --- CASE B: CLEAR ROAD (Target Speed) ---
+            else:
+                # Bell Curve Reward
+                # Coefficient 0.05 means:
+                # - 0 deviation = +1.0
+                # - 3 m/s deviation (~10km/h) = +0.63
+                # - 7 m/s deviation (~25km/h) = +0.08
+                speed_diff = abs(speed - target_speed)
+                r_speed = np.exp(-0.05 * speed_diff ** 2)
+                reward += r_speed
+
+            # Lane Centering
+            dist_center = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
+            reward -= dist_center * 0.1
+
         else:
-            reward -= 3.0  # Off-road/Lost signal
+            reward -= 2.0  # Lost
 
-        # Stopping Penalty
-        if speed < 0.5:
-            reward -= 2.0  # Stronger penalty for stopping
+        # 4. G-Force / Comfort Penalty
+        # We perform a dot product to separate longitudinal (braking/gas) from lateral (turning)
+        # This allows us to penalize Lateral Gs heavily (swerving)
+        # while being slightly more forgiving on Longitudinal Gs (braking for safety)
+        accel_vec = self.ego_vehicle.get_acceleration()
+        lateral_g = np.sqrt(accel_vec.y ** 2) / 9.81
+        long_g = np.sqrt(accel_vec.x ** 2) / 9.81
 
-        # Goal Reached
+        # Swerving hurts a lot
+        reward -= (lateral_g ** 2) * 5.0
+
+        # Hard braking hurts, but less (sometimes necessary for ACC)
+        if long_g > 0.3:  # Allow gentle braking without penalty
+            reward -= (long_g ** 2) * 2.0
+
+        # Goal
         if self.lp.done():
             reward += 500.0
             terminated = True
@@ -364,15 +450,18 @@ class CarlaEnv(gym.Env):
     def _render_hud(self, reward: float):
         # 1. Get Real Control Values (What the car is actually doing)
         ctrl = self.ego_vehicle.get_control()
-        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)
         # 2. Get Car Location to place text
         loc = self.ego_vehicle.get_location()
+        
+        gforce = np.sqrt(accel.x ** 2 + accel.y ** 2) / 9.81
 
         # 3. Define the text lines (Bottom to Top)
         info_text = [
             f"Speed: {speed:.1f} m/s",
             f"Steer: {ctrl.steer:.2f}",
             f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
+            f"GForce: {gforce:.2f} g",
             f"Reward: {reward:.2f}",
             f"Episode: {self.episode_step}"
         ]
