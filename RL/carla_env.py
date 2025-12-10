@@ -419,6 +419,9 @@ class CarlaEnv(gym.Env):
         # Swerving hurts a lot
         reward -= (lateral_g ** 2) * 5.0
 
+        if speed < 2.0:
+            reward += -5.0
+
         # Hard braking hurts, but less (sometimes necessary for ACC)
         if long_g > 0.3:  # Allow gentle braking without penalty
             reward -= (long_g ** 2) * 2.0
@@ -450,7 +453,8 @@ class CarlaEnv(gym.Env):
     def _render_hud(self, reward: float):
         # 1. Get Real Control Values (What the car is actually doing)
         ctrl = self.ego_vehicle.get_control()
-        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)
+        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+        accel = self.ego_vehicle.get_acceleration()
         # 2. Get Car Location to place text
         loc = self.ego_vehicle.get_location()
         
@@ -462,6 +466,7 @@ class CarlaEnv(gym.Env):
             f"Steer: {ctrl.steer:.2f}",
             f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
             f"GForce: {gforce:.2f} g",
+            f"distAhead: {self.distance_ahead:.2f} m",
             f"Reward: {reward:.2f}",
             f"Episode: {self.episode_step}"
         ]

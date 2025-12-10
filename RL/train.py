@@ -11,9 +11,9 @@ from wandb.integration.sb3 import WandbCallback
 from carla_remote_env import RemoteCarlaEnv
 
 # --- Configuration ---
-TOTAL_TIMESTEPS = 200_000
+TOTAL_TIMESTEPS = 500_000
 SAVE_FREQ = 100_000  # Save buffer & model every 100k steps
-PREVIOUS_RUN_ID = "mt21bt86"  # Set this string (e.g. "a1b2c3d4") to resume a crash
+PREVIOUS_RUN_ID = None # Set this string (e.g. "a1b2c3d4") to resume a crash
 WANDB_KEY = "232f438f252e30a2b8726b6acc2920339a1bbadd"
 
 # --- Setup Logging ---
