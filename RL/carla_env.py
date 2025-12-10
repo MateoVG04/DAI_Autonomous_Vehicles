@@ -11,7 +11,6 @@ from env_utils import build_state_vector, get_vehicle_speed_accel
 
 # Initialize Logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(stream_handler)
@@ -85,7 +84,7 @@ class CarlaEnv(gym.Env):
         self._init_world_settings()
         self._setup_vehicle_and_sensors()
 
-        logger.log(logging.INFO, "CarlaEnv initialized")
+        logger.info("CarlaEnv initialized")
 
     def _init_world_settings(self):
         """Re-apply settings after loading a map"""
@@ -214,6 +213,7 @@ class CarlaEnv(gym.Env):
                 new_map_name = self.maps[map_index]
                 logger.info(f"Switching Map to {new_map_name}...")
 
+                self.cleanup()
                 self.client.load_world(new_map_name)
                 self.world = self.client.get_world()
                 self._init_world_settings()
@@ -355,76 +355,77 @@ class CarlaEnv(gym.Env):
         terminated = False
 
         # 1. CRITICAL: Collision
-        # Increased wait ticks slightly to prevent spawn-physics collisions
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
             return -200.0, True
 
         # 2. Get Data
-        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
+        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
 
-        # Get Dynamic Speed Limit
+        # Dynamic Speed Limit
         speed_limit_kmh = self.ego_vehicle.get_speed_limit()
-        target_speed = speed_limit_kmh / 3.6
-        # Safety fallback: Ensure target is never 0 to prevent division errors
-        target_speed = max(5.0, target_speed)
+        target_speed = max(5.0, speed_limit_kmh / 3.6)
 
-        # 3. ACC Safe Following Logic
-        # 2-second rule + 10m buffer
-        safe_distance = max(10.0, speed * 2.0)
-
-        # Use Ground Truth distance (Noise-free)
+        # 3. ACC Logic
+        # 2-second rule + buffer
+        safe_dist = max(5.0, speed * 2.0)
         dist_to_lead = self.distance_ahead
 
         if waypoints:
-            # --- CASE A: GAP VIOLATION (Overrides Speed Limit) ---
-            if dist_to_lead < safe_distance:
-                # Calculate how bad the violation is
-                violation_ratio = 1.0 - (dist_to_lead / safe_distance)
+            # --- FIX 1: Unified Reward Logic ---
+            # Instead of separate branches, we just change the TARGET speed.
 
-                # Penalty scales with violation severity
-                # If dist is 50% of safe distance, penalty is -0.5
-                reward -= violation_ratio * 1.0
+            if dist_to_lead < safe_dist:
+                # TRAFFIC MODE:
+                # If we are too close, the target speed is NOT the limit.
+                # The target speed is ZERO (or matching the lead car).
+                # This allows the "Speed Reward" below to reward us for slowing down.
+                effective_target_speed = 0.0
 
-                # PANIC: If we are too close AND moving fast relative to lead logic
-                # (Simplified: if we are close and fast)
-                if dist_to_lead < 10.0 and speed > 5.0:
-                    reward -= 2.0
-
-                    # --- CASE B: CLEAR ROAD (Target Speed) ---
+                # Optional: Extra penalty for being dangerously close (Tailgating)
+                if dist_to_lead < safe_dist * 0.5:
+                    reward -= 1.0
             else:
-                # Bell Curve Reward
-                # Coefficient 0.05 means:
-                # - 0 deviation = +1.0
-                # - 3 m/s deviation (~10km/h) = +0.63
-                # - 7 m/s deviation (~25km/h) = +0.08
-                speed_diff = abs(speed - target_speed)
-                r_speed = np.exp(-0.05 * speed_diff ** 2)
-                reward += r_speed
+                # FREE FLOW MODE:
+                effective_target_speed = target_speed
+
+            # --- Speed Reward (Applies to both modes) ---
+            # If Traffic Mode: We get points for slowing to 0.
+            # If Free Flow: We get points for hitting speed limit.
+            speed_diff = abs(speed - effective_target_speed)
+            r_speed = np.exp(-0.1 * speed_diff ** 2)
+            reward += r_speed
 
             # Lane Centering
             dist_center = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
             reward -= dist_center * 0.1
-
         else:
-            reward -= 2.0  # Lost
+            reward -= 2.0
 
-        # 4. G-Force / Comfort Penalty
-        # We perform a dot product to separate longitudinal (braking/gas) from lateral (turning)
-        # This allows us to penalize Lateral Gs heavily (swerving)
-        # while being slightly more forgiving on Longitudinal Gs (braking for safety)
+        # 4. G-Force (FIX 2: Coordinate Transformation)
+        # We must project the world acceleration onto the car's local vectors
         accel_vec = self.ego_vehicle.get_acceleration()
-        lateral_g = np.sqrt(accel_vec.y ** 2) / 9.81
-        long_g = np.sqrt(accel_vec.x ** 2) / 9.81
+        ego_tf = self.ego_vehicle.get_transform()
+        fwd_vec = ego_tf.get_forward_vector()
+        right_vec = ego_tf.get_right_vector()
 
-        # Swerving hurts a lot
-        reward -= (lateral_g ** 2) * 5.0
+        long_accel = accel_vec.dot(fwd_vec)
+        lat_accel = accel_vec.dot(right_vec)
 
-        if speed < 2.0:
-            reward += -5.0
+        long_g = abs(long_accel) / 9.81
+        lat_g = abs(lat_accel) / 9.81
 
-        # Hard braking hurts, but less (sometimes necessary for ACC)
-        if long_g > 0.3:  # Allow gentle braking without penalty
-            reward -= (long_g ** 2) * 2.0
+        # Swerving (Lateral) is bad
+        reward -= (lat_g ** 2) * 5.0
+
+        # Braking (Longitudinal) is okay if necessary, but punish jerky driving
+        if long_g > 0.5:
+            reward -= (long_g ** 2) * 1.0
+
+        # 5. Stopping Penalty (FIX 3: Context Aware)
+        # Only punish stopping if the road is CLEAR.
+        # If there is a car ahead (dist < 20), stopping is allowed (and rewarded by speed logic).
+        if speed < 0.1 and dist_to_lead > 20.0:
+            reward -= 5.0
 
         # Goal
         if self.lp.done():
@@ -434,11 +435,14 @@ class CarlaEnv(gym.Env):
         return reward, terminated
 
     def cleanup(self):
-        """Destroys current actors"""
-        if self.radar_sensor and self.radar_sensor.is_alive:
-            self.radar_sensor.destroy()
+        """Destroys current actors cleanly."""
+        # 1. CLEANUP SENSORS
         if self.col_sensor and self.col_sensor.is_alive:
+            if self.col_sensor.is_listening:  # <--- CRITICAL CHECK
+                self.col_sensor.stop()
             self.col_sensor.destroy()
+
+        # 2. CLEANUP VEHICLE
         if self.ego_vehicle and self.ego_vehicle.is_alive:
             self.ego_vehicle.destroy()
 

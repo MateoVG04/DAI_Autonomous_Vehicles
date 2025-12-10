@@ -103,10 +103,12 @@ def train():
         model.save(final_path)
         logger.info(f"Final model saved to: {os.path.abspath(final_path)}.zip")
 
-    except KeyboardInterrupt or Exception:
+    except Exception:
         logger.warning("Interrupt detected. Saving emergency checkpoint...")
         model.save(f"{checkpoint_dir}/model_interrupted")
         model.save_replay_buffer(f"{checkpoint_dir}/buffer_interrupted.pkl")
+    except KeyboardInterrupt:
+        logger.warning("KeyboardInterrupt detected. Saving nothing...")
 
     finally:
         env.close()
