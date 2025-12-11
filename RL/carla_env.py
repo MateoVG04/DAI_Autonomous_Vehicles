@@ -18,7 +18,7 @@ logger.addHandler(stream_handler)
 # Constants
 EPISODES = 1500
 WAIT_TICKS = 15
-
+SPAWN_VEHICLES = 10
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -61,7 +61,6 @@ class CarlaEnv(gym.Env):
 
         # Setup vehicle and sensors
         self.ego_vehicle = None
-        self.radar_sensor = None
         self.col_sensor = None
         self.camera_sensor = None
 
@@ -114,18 +113,14 @@ class CarlaEnv(gym.Env):
         if not self.ego_vehicle:
             raise RuntimeError("Failed to spawn vehicle")
 
-        # 3. Setup Sensors (Collision)
+        # 3. Setup Sensors (Collision & Camera)
         self._setup_sensors()
 
         # 4. Spawn Traffic
         self._spawn_traffic(10, 0)  # Spawn 10 vehicles, 0 walkers
 
-
         # 5. Setup Planners
-        # Global route planner: Calculates the map path once
         self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=2.0)
-
-        # Local: Follows the path dynamically
         self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
             'target_speed': 54, # km/h
             'sampling_radius': 2.0,
@@ -140,6 +135,7 @@ class CarlaEnv(gym.Env):
             bp_col, carla.Transform(), attach_to=self.ego_vehicle)
         self.col_sensor.listen(self.collision_callback)
 
+        # Camera
         bp_rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
         bp_rgb_cam.set_attribute('image_size_x', '800')
         bp_rgb_cam.set_attribute('image_size_y', '600')
@@ -166,7 +162,7 @@ class CarlaEnv(gym.Env):
 
     def _spawn_traffic(self, n_vehicles=10, n_walkers=0):
         """
-        Spawns vehicles and walkers in the simulation.
+        Spawns vehicles and pedestrians in the simulation.
         :param n_vehicles: Number of cars to spawn.
         :param n_walkers: Number of pedestrians to spawn.
         """
@@ -211,11 +207,11 @@ class CarlaEnv(gym.Env):
         # Execute Batch
         results = self.client.apply_batch_sync(batch, True)
 
-        # Check for failures (optional logging)
+        # Collect actors
         self.traffic_actors = [r.actor_id for r in results if not r.error]
         logger.info(f"Successfully spawned {len(self.traffic_actors)} vehicles.")
 
-        # 4. Spawn Walkers (Optional)
+        # 4. Spawn Walkers (Extra)
         if n_walkers > 0:
             # (Walker spawning is more complex: needs Controller + Walker actor)
             # Keeping it simple: Just spawn points navigation for now

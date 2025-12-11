@@ -2,22 +2,19 @@ import csv
 import os
 import random
 import carla
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 #from shapely.geometry import Polygon, MultiPolygon
 #import carla
-from RL.ACNetwork import ActorCriticNetwork
-from RL.carla_environment import CarlaEnv
+from RL.PPO.ACNetwork import ActorCriticNetwork
+from RL.PPO.carla_environment import CarlaEnv
 from RL.environment.action_utils import CarlaActionsConverter
 from RL.environment.envs_manager import make_vec_envs
 from RL.environment.observation_utils import CarlaObservationConverter
-from agents.tools.misc import compute_distance, get_speed
+from agents.tools.misc import get_speed
 
-import math
 
 def save_metrics_to_csv(filename, metrics_dict):
     """Save metrics to a CSV file."""

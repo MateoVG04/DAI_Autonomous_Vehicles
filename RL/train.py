@@ -10,16 +10,11 @@ from stable_baselines3.common.noise import NormalActionNoise
 from wandb.integration.sb3 import WandbCallback
 from carla_remote_env import RemoteCarlaEnv
 
-# --- Configuration ---
-TOTAL_TIMESTEPS = 500_000
-SAVE_FREQ = 100_000  # Save buffer & model every 100k steps
-PREVIOUS_RUN_ID = None # Set this string (e.g. "a1b2c3d4") to resume a crash
-WANDB_KEY = "232f438f252e30a2b8726b6acc2920339a1bbadd"
 
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-os.environ["WANDB_API_KEY"] = WANDB_KEY
+os.environ["WANDB_API_KEY"] = "232f438f252e30a2b8726b6acc2920339a1bbadd"
 
 
 def get_latest_checkpoint(run_id):
@@ -31,36 +26,40 @@ def get_latest_checkpoint(run_id):
     return max(files, key=os.path.getctime) if files else None
 
 
-def train():
-    # 1. Initialize WandB & Environment
+def train(total_timesteps, save_freq, prev_run_id):
+
+    # 1. INITIALIZE WANDB AND ENV
     env = RemoteCarlaEnv()
     run = wandb.init(
         project="carla-rl",
-        id=PREVIOUS_RUN_ID,
+        id=prev_run_id,
         resume="allow",
-        config={"policy": "TD3", "timesteps": TOTAL_TIMESTEPS},
+        config={"policy": "TD3", "timesteps": total_timesteps},
         sync_tensorboard=True
     )
 
-    # 2. Paths
+    # 2. PATHS
     checkpoint_dir = f"./models/{run.id}"
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # 3. Load or Create Model
+    # 3. LOAD/CREATE MODEL
     latest_ckpt = get_latest_checkpoint(run.id)
     n_actions = env.action_space.shape[0]
     action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
 
+    # If model load
     if latest_ckpt:
-        logger.info(f"🔄 RESUMING from checkpoint: {latest_ckpt}")
+        logger.info(f"RESUMING from checkpoint: {latest_ckpt}")
         model = TD3.load(latest_ckpt, env=env)
         model.action_noise = action_noise  # Re-attach noise
 
-        # Load Buffer (Critical for TD3 continuity)
+        # Load Buffer
         buffer_path = latest_ckpt.replace(".zip", "_replay_buffer.pkl")
         if os.path.exists(buffer_path):
-            logger.info("📦 Loading Replay Buffer...")
+            logger.info("Loading Replay Buffer...")
             model.load_replay_buffer(buffer_path)
+
+    # Else create model
     else:
         logger.info(f"Starting FRESH training run: {run.id}")
         model = TD3(
@@ -74,10 +73,10 @@ def train():
             tensorboard_log=f"./runs/{run.id}"
         )
 
-    # 4. Callbacks (Save every 100k steps)
+    # 4. CALLBACK FOR CHECKPOINT AND WANDB
     callbacks = CallbackList([
         CheckpointCallback(
-            save_freq=SAVE_FREQ,
+            save_freq=save_freq,
             save_path=checkpoint_dir,
             name_prefix="td3_ckpt",
             save_replay_buffer=True,  # Saves the heavy buffer for crash recovery
@@ -86,7 +85,7 @@ def train():
         WandbCallback(gradient_save_freq=5000, verbose=2)
     ])
 
-    # 5. Start Training
+    # 5. TRAINING & SAVE
     try:
         logger.info("Training started...")
         start_time = time.time()
@@ -97,19 +96,23 @@ def train():
             reset_num_timesteps=False  # Keeps the progress bar correct on resume
         )
 
-        # 6. Save Final Model to Root Folder
+        # Save model after training
         logger.info("Training Finished.")
-        final_path = f"td3_carla_{TOTAL_TIMESTEPS}"
+        final_path = f"td3_carla_2_{TOTAL_TIMESTEPS}"
         model.save(final_path)
         logger.info(f"Final model saved to: {os.path.abspath(final_path)}.zip")
 
+    # Save early if exception
     except Exception:
         logger.warning("Interrupt detected. Saving emergency checkpoint...")
         model.save(f"{checkpoint_dir}/model_interrupted")
         model.save_replay_buffer(f"{checkpoint_dir}/buffer_interrupted.pkl")
+
+    # Dont save if keyboard interrupt (user realised bad training)
     except KeyboardInterrupt:
         logger.warning("KeyboardInterrupt detected. Saving nothing...")
 
+    # Finish training by closing env and stopping run
     finally:
         env.close()
         run.finish()
@@ -117,4 +120,8 @@ def train():
 
 
 if __name__ == '__main__':
-    train()
+    TOTAL_TIMESTEPS = 500_000
+    SAVE_FREQ = 100_000  # Save buffer & model every 100k steps
+    PREVIOUS_RUN_ID = None  # Set this string (e.g. "a1b2c3d4") to resume a crash
+
+    train(TOTAL_TIMESTEPS, SAVE_FREQ, PREVIOUS_RUN_ID)
