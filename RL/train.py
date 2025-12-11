@@ -62,7 +62,7 @@ def train():
             logger.info("📦 Loading Replay Buffer...")
             model.load_replay_buffer(buffer_path)
     else:
-        logger.info(f"🆕 Starting FRESH training run: {run.id}")
+        logger.info(f"Starting FRESH training run: {run.id}")
         model = TD3(
             "MlpPolicy",
             env,
