@@ -591,7 +591,8 @@ class CarlaEnv(gym.Env):
 
         # 3. Define the text lines (Bottom to Top)
         info_text = [
-            f"Speed: {speed:.1f} m/s",
+            f"Speed: {speed * 3.6:.1f} km/h",
+            f"speed_limit: {self.ego_vehicle.get_speed_limit():.1f} km/h",
             f"Steer: {ctrl.steer:.2f}",
             f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
             f"GForce: {gforce:.2f} g",
