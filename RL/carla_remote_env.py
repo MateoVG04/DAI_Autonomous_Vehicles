@@ -3,6 +3,7 @@ import Pyro4
 import numpy as np
 import logging
 import time
+import serpent
 
 
 """
@@ -82,15 +83,23 @@ class RemoteCarlaEnv(gym.Env):
             pass
 
     def get_latest_image(self):
-        img_list, frame_id = self.remote_env.get_latest_image()
-        if img_list is not None:
-            img_np = np.array(img_list, dtype=np.uint8)
-            return img_np, frame_id
-        return None, None
+        img_bytes, shape, frame_id = self.remote_env.get_latest_image()
+
+        if img_bytes is None:
+            return None, None
+
+        # Pyro+Serpent may have encoded bytes as a dict; convert it back.
+        img_bytes = serpent.tobytes(img_bytes)  # handles dict/str/bytes
+
+        h, w, c = shape
+        img_np = np.frombuffer(img_bytes, dtype=np.uint8).reshape((h, w, c))
+
+        return img_np, frame_id
 
     def draw_detections(self, detections):
         """
         Draws simple 3D boxes + labels in the CARLA world for each detection.
         `detections` is a list of dicts with keys: 'name' and 'conf'.
         """
-        self.draw_detections(detections)
+        self.remote_env.draw_detections(detections)
+

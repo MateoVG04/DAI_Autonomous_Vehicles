@@ -593,10 +593,15 @@ class CarlaEnv(gym.Env):
 
     def get_latest_image(self):
         if self.latest_rgb is None:
-            return None, None
-        img_list = self.latest_rgb.tolist()
-        frame_id = int(self.latest_frame_id)
-        return img_list, frame_id
+            # nothing received yet
+            return None, None, None
+
+            # latest_rgb is a numpy array (H, W, 3), dtype uint8
+        h, w, c = self.latest_rgb.shape
+        img_bytes = self.latest_rgb.tobytes()  # flat uint8 buffer
+
+        # Return only builtin types: bytes + tuple + int
+        return img_bytes, (h, w, c), int(self.latest_frame_id)
 
     def draw_detections(self, detections):
         """
