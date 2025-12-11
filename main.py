@@ -41,9 +41,16 @@ def main(env:RemoteCarlaEnv, RL_model_path: str, obj_model_path: str, max_steps:
         obs, reward, terminated, truncated, info = env.step(action)
         ep_reward += reward
 
+        #start = time.time()
         img, frame_id = env.get_latest_image()
+        #end = time.time()
+        #print("latest image time: ", end - start)
         if img is not None:
-            results = obj_detect_model.predict(img, verbose=False)
+            #start = time.time()
+            results = obj_detect_model.predict(img, verbose=False, conf=0.1)
+            print("results:", results)
+            #end = time.time()
+            #print("Model predict time: ", end - start)
             result = results[0]
             detections = []
             boxes = result.boxes
@@ -61,8 +68,8 @@ def main(env:RemoteCarlaEnv, RL_model_path: str, obj_model_path: str, max_steps:
             if detections:
                 env.draw_detections(detections)
 
-        # Optional: slow down for visualization
-        # time.sleep(0.01)
+        #Optional: slow down for visualization
+        #time.sleep(0.01)
 
         if terminated or truncated:
             logger.info(
