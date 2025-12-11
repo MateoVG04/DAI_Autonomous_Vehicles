@@ -80,3 +80,17 @@ class RemoteCarlaEnv(gym.Env):
             self.remote_env.close()
         except:
             pass
+
+    def get_latest_image(self):
+        img_list, frame_id = self.remote_env.get_latest_image()
+        if img_list is not None:
+            img_np = np.array(img_list, dtype=np.uint8)
+            return img_np, frame_id
+        return None, None
+
+    def draw_detections(self, detections):
+        """
+        Draws simple 3D boxes + labels in the CARLA world for each detection.
+        `detections` is a list of dicts with keys: 'name' and 'conf'.
+        """
+        self.draw_detections(detections)

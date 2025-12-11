@@ -119,7 +119,7 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
         np.array([accel_norm], dtype=np.float32),  # Acceleration
         np.array([steering_norm], dtype=np.float32),  # Current Control Command (Proprioception)
         np.array([cte_norm], dtype=np.float32),  # Immediate Lateral Error (Lane Centering)
-        np.array([dist_norm], dtype=np.float32)  # Radar Distance
+        np.array([dist_norm], dtype=np.float32),  # Radar Distance
     ])
 
     return final_state

@@ -2,6 +2,7 @@ import time
 import logging
 from stable_baselines3 import TD3
 from train import RemoteCarlaEnv
+from ultralytics import YOLO
 
 """
 Evaluate a trained TD3 agent on the remote CARLA environment.
@@ -24,6 +25,7 @@ def evaluate(model_path: str, env: RemoteCarlaEnv, episodes: int, max_steps: int
     """
     # Load environment & model
     model = TD3.load(model_path, env=env)
+    obj_detect_model = YOLO("../Machine_Vision/runs/Train5/best.pt")
 
     mean_reward = 0.0
     for ep in range(episodes):
@@ -37,6 +39,30 @@ def evaluate(model_path: str, env: RemoteCarlaEnv, episodes: int, max_steps: int
             action, _ = model.predict(obs, deterministic=True)
 
             obs, reward, terminated, truncated, info = env.step(action)
+            img, frame_id = env.get_latest_image()
+            if img is not None:
+                results = obj_detect_model.predict(img, verbose=False)
+                print("first result:", results)
+                result = results[0]
+
+                # Convert YOLO results to a plain Python structure
+                detections = []
+                boxes = result.boxes
+                print("boxes:", boxes)
+                if boxes is not None and len(boxes) > 0:
+                    cls_list = boxes.cls.tolist()
+                    conf_list = boxes.conf.tolist()
+
+                    for cls, conf in zip(cls_list, conf_list):
+                        name = result.names[int(cls)]
+                        detections.append({
+                            "name": name,
+                            "conf": float(conf)
+                        })
+
+                # Ask the CARLA env to draw them on the world
+                if detections:
+                    env.draw_detections(detections)
 
             ep_reward += reward
 
@@ -57,6 +83,6 @@ def evaluate(model_path: str, env: RemoteCarlaEnv, episodes: int, max_steps: int
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
     start = time.time()
-    evaluate("carla_model_300000_2", env, episodes=5, max_steps=1000)
+    evaluate("./Model_TD3/td3_carla_500000", env, episodes=5, max_steps=1000)
     end = time.time()
     logger.log(logging.INFO, f"Total evaluation time: {(end - start) / 60} minutes")

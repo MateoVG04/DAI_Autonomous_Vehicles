@@ -63,6 +63,7 @@ class CarlaEnv(gym.Env):
         self.ego_vehicle = None
         self.radar_sensor = None
         self.col_sensor = None
+        self.camera_sensor = None
 
         # Planners
         self.grp = None
@@ -78,6 +79,8 @@ class CarlaEnv(gym.Env):
         self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
         self.distance_ahead = 50.0
+        self.latest_rgb = None  # type: #Optional[np.ndarray]
+        self.latest_frame_id = -1  # no frame received yet
         self.collision_history = []
         self.episode_step = 0
 
@@ -129,8 +132,35 @@ class CarlaEnv(gym.Env):
             bp_col, carla.Transform(), attach_to=self.ego_vehicle)
         self.col_sensor.listen(self.collision_callback)
 
+        bp_rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
+        bp_rgb_cam.set_attribute('image_size_x', '800')
+        bp_rgb_cam.set_attribute('image_size_y', '600')
+        bp_rgb_cam.set_attribute('fov', '90')
+        cam_transform = carla.Transform(
+            carla.Location(x=1.5, z=1.6),  # front & slightly above
+            carla.Rotation(pitch=0.0)
+        )
+        self.camera_sensor = self.world.spawn_actor(
+            bp_rgb_cam, cam_transform, attach_to=self.ego_vehicle
+        )
+        self.camera_sensor.listen(self.camera_callback)
+
+    def radar_callback(self, data):
+        try:
+            depths = [d.depth for d in data]
+            self.distance_ahead = float(min(depths)) if depths else 50.0
+        except: pass
+
     def collision_callback(self, event):
         self.collision_history.append(event)
+
+    def camera_callback(self, image: carla.Image):
+        array = np.frombuffer(image.raw_data, dtype=np.uint8)
+        array = array.reshape((image.height, image.width, 4))
+        # Drop alpha channel & convert BGRA -> RGB
+        rgb = array[:, :, :3][:, :, ::-1].copy()
+        self.latest_rgb = rgb
+        self.latest_frame_id = image.frame
 
     def _get_gt_distance(self, range_limit=50.0):
         """
@@ -461,7 +491,7 @@ class CarlaEnv(gym.Env):
         accel = self.ego_vehicle.get_acceleration()
         # 2. Get Car Location to place text
         loc = self.ego_vehicle.get_location()
-        
+
         gforce = np.sqrt(accel.x ** 2 + accel.y ** 2) / 9.81
 
         # 3. Define the text lines (Bottom to Top)
@@ -485,4 +515,56 @@ class CarlaEnv(gym.Env):
                 draw_shadow=True,
                 color=carla.Color(255, 255, 255),  # White text
                 life_time=0.05  # Update every frame (assuming 20fps)
+            )
+
+    def get_latest_image(self):
+        if self.latest_rgb is None:
+            return None, None
+        img_list = self.latest_rgb.tolist()
+        frame_id = int(self.latest_frame_id)
+        return img_list, frame_id
+
+    def draw_detections(self, detections):
+        """
+        Draws simple 3D boxes + labels in the CARLA world for each detection.
+        `detections` is a list of dicts with keys: 'name' and 'conf'.
+        """
+        if self.ego_vehicle is None:
+            return
+
+        ego_loc = self.ego_vehicle.get_location()
+
+        for i, det in enumerate(detections):
+            label = f"{det['name']} {det['conf']:.2f}"
+
+            # Place each box in front of the ego vehicle, but offset sideways
+            # so they don't overlap (purely for visualization; not real 3D positions)
+            offset_x = 8.0  # 8 m in front of the vehicle
+            offset_y = (i - len(detections) / 2) * 2.0  # spread them left/right
+            center = carla.Location(
+                x=ego_loc.x + offset_x,
+                y=ego_loc.y + offset_y,
+                z=ego_loc.z + 1.5
+            )
+
+            # A small box representing the detection
+            extent = carla.Vector3D(1.0, 1.0, 1.0)
+            bbox = carla.BoundingBox(center, extent)
+
+            # Draw green box
+            self.world.debug.draw_box(
+                bbox,
+                carla.Rotation(),  # axis-aligned
+                thickness=0.1,
+                color=carla.Color(0, 255, 0),
+                life_time=0.05  # refresh every tick
+            )
+
+            # Draw label above the box
+            self.world.debug.draw_string(
+                center + carla.Location(z=1.2),
+                label,
+                draw_shadow=True,
+                color=carla.Color(255, 255, 255),
+                life_time=0.05
             )
