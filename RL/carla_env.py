@@ -76,7 +76,7 @@ class CarlaEnv(gym.Env):
 
         # Obs space size: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + DistAhead(1) = 35
         obs_size = self.waypoints_size * 2 + 5
-        self.obs_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
         self.distance_ahead = 50.0
         self.latest_rgb = None  # type: #Optional[np.ndarray]
@@ -84,6 +84,7 @@ class CarlaEnv(gym.Env):
         self.collision_history = []
         self.episode_step = 0
 
+        self.traffic_actors = []
         self._init_world_settings()
         self._setup_vehicle_and_sensors()
 
@@ -113,7 +114,10 @@ class CarlaEnv(gym.Env):
         # 3. Setup Sensors (Radar/Collision)
         self._setup_sensors()
 
-        # 4. Setup Planners
+        # 4. Spawn Traffic
+        self._spawn_traffic(10, 0)  # Spawn 10 vehicles, 0 walkers
+
+        # 5. Setup Planners
         # Global route planner: Calculates the map path once
         self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=2.0)
 
@@ -123,6 +127,63 @@ class CarlaEnv(gym.Env):
             'sampling_radius': 2.0,
             'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
         })
+
+    def _spawn_traffic(self, n_vehicles=10, n_walkers=0):
+        """
+        Spawns vehicles and walkers in the simulation.
+        :param n_vehicles: Number of cars to spawn.
+        :param n_walkers: Number of pedestrians to spawn.
+        """
+        logging.info(f"Spawning {n_vehicles} vehicles and {n_walkers} walkers...")
+
+        # 1. Get Traffic Manager
+        tm = self.client.get_trafficmanager(8000)  # Default port
+        tm.set_global_distance_to_leading_vehicle(2.5)
+        tm.set_hybrid_physics_mode(True)  # Optimization
+        tm.set_synchronous_mode(True)
+
+        # 2. Get Blueprints
+        bp_lib = self.world.get_blueprint_library()
+
+        # Filter safe vehicles (no bikes/motorcycles/trucks usually better for training)
+        vehicle_bps = bp_lib.filter('vehicle.*')
+        vehicle_bps = [x for x in vehicle_bps if int(x.get_attribute('number_of_wheels')) > 3]
+
+        # 3. Spawn Vehicles
+        spawn_points = self.world.get_map().get_spawn_points()
+        for sp in spawn_points:
+            if sp == self.ego_vehicle.get_transform():
+                spawn_points.remove(sp)
+                break
+        n_vehicles = min(n_vehicles, len(spawn_points))
+        random.shuffle(spawn_points)
+
+        batch = []
+        for i in range(n_vehicles):
+            bp = random.choice(vehicle_bps)
+            if bp.has_attribute('color'):
+                color = random.choice(bp.get_attribute('color').recommended_values)
+                bp.set_attribute('color', color)
+
+            # Set Autopilot ON immediately
+            bp.set_attribute('role_name', 'autopilot')
+
+            # Prepare spawn command
+            batch.append(carla.command.SpawnActor(bp, spawn_points[i])
+                         .then(carla.command.SetAutopilot(carla.command.FutureActor, True, tm.get_port())))
+
+        # Execute Batch
+        results = self.client.apply_batch_sync(batch, True)
+
+        # Check for failures (optional logging)
+        self.traffic_actors = [r.actor_id for r in results if not r.error]
+        logger.info(f"Successfully spawned {len(self.traffic_actors)} vehicles.")
+
+        # 4. Spawn Walkers (Optional)
+        if n_walkers > 0:
+            # (Walker spawning is more complex: needs Controller + Walker actor)
+            # Keeping it simple: Just spawn points navigation for now
+            pass
 
     def _setup_sensors(self):
 
@@ -247,7 +308,7 @@ class CarlaEnv(gym.Env):
                 self.client.load_world(new_map_name)
                 self.world = self.client.get_world()
                 self._init_world_settings()
-                self._setup_vehicle_and_sensors()
+                self._setup_vehicle_and_sensors() # Respawn vehicle and sensors and traffic
 
             # 2. Reset Actor State
             if not self.ego_vehicle or not self.ego_vehicle.is_alive:
@@ -475,6 +536,19 @@ class CarlaEnv(gym.Env):
         # 2. CLEANUP VEHICLE
         if self.ego_vehicle and self.ego_vehicle.is_alive:
             self.ego_vehicle.destroy()
+
+        # 3. CLEANUP TRAFFIC
+        if not self.traffic_actors:
+            return
+
+        logger.info(f"Destroying {len(self.traffic_actors)} traffic vehicles...")
+
+        # Use batch command for instant destruction
+        batch = [carla.command.DestroyActor(x) for x in self.traffic_actors]
+        self.client.apply_batch(batch)
+
+        # Clear the list
+        self.traffic_actors = []
 
     def close(self):
         """
