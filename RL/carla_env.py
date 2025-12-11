@@ -86,7 +86,7 @@ class CarlaEnv(gym.Env):
 
         self.traffic_actors = []
         self._init_world_settings()
-        self._setup_vehicle_and_sensors()
+        self._setup_vehicle_sensors_traffic_weather()
 
         logger.info("CarlaEnv initialized")
 
@@ -97,7 +97,7 @@ class CarlaEnv(gym.Env):
         settings.fixed_delta_seconds = 0.05
         self.world.apply_settings(settings)
 
-    def _setup_vehicle_and_sensors(self):
+    def _setup_vehicle_sensors_traffic_weather(self):
         """Spawns ego vehicle and attaches sensors (Run after map load)"""
         self.cleanup()
 
@@ -117,6 +117,9 @@ class CarlaEnv(gym.Env):
         # 4. Spawn Traffic
         self._spawn_traffic(10, 0)  # Spawn 10 vehicles, 0 walkers
 
+        # 5. Set Random Weather
+        self._set_random_weather()
+
         # 5. Setup Planners
         # Global route planner: Calculates the map path once
         self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=2.0)
@@ -127,6 +130,38 @@ class CarlaEnv(gym.Env):
             'sampling_radius': 2.0,
             'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
         })
+
+    def _setup_sensors(self):
+
+        # Collision
+        bp_col = self.world.get_blueprint_library().find('sensor.other.collision')
+        self.col_sensor = self.world.spawn_actor(
+            bp_col, carla.Transform(), attach_to=self.ego_vehicle)
+        self.col_sensor.listen(self.collision_callback)
+
+        bp_rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
+        bp_rgb_cam.set_attribute('image_size_x', '800')
+        bp_rgb_cam.set_attribute('image_size_y', '600')
+        bp_rgb_cam.set_attribute('fov', '90')
+        cam_transform = carla.Transform(
+            carla.Location(x=1.5, z=1.6),  # front & slightly above
+            carla.Rotation(pitch=0.0)
+        )
+        self.camera_sensor = self.world.spawn_actor(
+            bp_rgb_cam, cam_transform, attach_to=self.ego_vehicle
+        )
+        self.camera_sensor.listen(self.camera_callback)
+
+    def collision_callback(self, event):
+        self.collision_history.append(event)
+
+    def camera_callback(self, image: carla.Image):
+        array = np.frombuffer(image.raw_data, dtype=np.uint8)
+        array = array.reshape((image.height, image.width, 4))
+        # Drop alpha channel & convert BGRA -> RGB
+        rgb = array[:, :, :3][:, :, ::-1].copy()
+        self.latest_rgb = rgb
+        self.latest_frame_id = image.frame
 
     def _spawn_traffic(self, n_vehicles=10, n_walkers=0):
         """
@@ -185,43 +220,29 @@ class CarlaEnv(gym.Env):
             # Keeping it simple: Just spawn points navigation for now
             pass
 
-    def _setup_sensors(self):
+    def _set_random_weather(self):
+        """Sets a random weather preset for the simulation."""
+        weather_presets = [
+            carla.WeatherParameters.ClearNight,
+            carla.WeatherParameters.CloudyNoon,
+            carla.WeatherParameters.WetNoon,
+            carla.WeatherParameters.WetCloudyNoon,
+            carla.WeatherParameters.MidRainyNoon,
+            carla.WeatherParameters.HardRainNoon,
+            carla.WeatherParameters.SoftRainNoon,
+            carla.WeatherParameters.ClearSunset,
+            carla.WeatherParameters.CloudySunset,
+            carla.WeatherParameters.WetSunset,
+            carla.WeatherParameters.WetCloudySunset,
+            carla.WeatherParameters.MidRainSunset,
+            carla.WeatherParameters.HardRainSunset,
+            carla.WeatherParameters.SoftRainSunset,
+        ]
 
-        # Collision
-        bp_col = self.world.get_blueprint_library().find('sensor.other.collision')
-        self.col_sensor = self.world.spawn_actor(
-            bp_col, carla.Transform(), attach_to=self.ego_vehicle)
-        self.col_sensor.listen(self.collision_callback)
+        weather = random.choice(weather_presets)
+        self.world.set_weather(weather)
+        logger.info("Weather updated to random preset.")
 
-        bp_rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
-        bp_rgb_cam.set_attribute('image_size_x', '800')
-        bp_rgb_cam.set_attribute('image_size_y', '600')
-        bp_rgb_cam.set_attribute('fov', '90')
-        cam_transform = carla.Transform(
-            carla.Location(x=1.5, z=1.6),  # front & slightly above
-            carla.Rotation(pitch=0.0)
-        )
-        self.camera_sensor = self.world.spawn_actor(
-            bp_rgb_cam, cam_transform, attach_to=self.ego_vehicle
-        )
-        self.camera_sensor.listen(self.camera_callback)
-
-    def radar_callback(self, data):
-        try:
-            depths = [d.depth for d in data]
-            self.distance_ahead = float(min(depths)) if depths else 50.0
-        except: pass
-
-    def collision_callback(self, event):
-        self.collision_history.append(event)
-
-    def camera_callback(self, image: carla.Image):
-        array = np.frombuffer(image.raw_data, dtype=np.uint8)
-        array = array.reshape((image.height, image.width, 4))
-        # Drop alpha channel & convert BGRA -> RGB
-        rgb = array[:, :, :3][:, :, ::-1].copy()
-        self.latest_rgb = rgb
-        self.latest_frame_id = image.frame
 
     def _get_gt_distance(self, range_limit=50.0):
         """
@@ -308,11 +329,11 @@ class CarlaEnv(gym.Env):
                 self.client.load_world(new_map_name)
                 self.world = self.client.get_world()
                 self._init_world_settings()
-                self._setup_vehicle_and_sensors() # Respawn vehicle and sensors and traffic
+                self._setup_vehicle_sensors_traffic_weather() # Respawn vehicle and sensors and traffic and weather
 
             # 2. Reset Actor State
             if not self.ego_vehicle or not self.ego_vehicle.is_alive:
-                self._setup_vehicle_and_sensors()
+                self._setup_vehicle_sensors_traffic_weather()
 
             spawn_points = self.world.get_map().get_spawn_points()
             spawn_point = random.choice(spawn_points)
