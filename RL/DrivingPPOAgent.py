@@ -161,6 +161,8 @@ def random_spawn(world, blueprint):
     spawn_point.rotation.pitch = 0.0
     return world.try_spawn_actor(blueprint, spawn_point)
 
+
+
 def run_episode(env, agent, vehicle, images, distance_to_vehicle, speed_signs=None, pedestrians=None, red_lights=None):
     """
     Run a single episode and return the collected data

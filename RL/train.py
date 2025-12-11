@@ -1,75 +1,120 @@
-import gymnasium as gym
-import Pyro4
-import numpy as np
+import os
+import glob
 import time
+import wandb
+import logging
+import numpy as np
 from stable_baselines3 import TD3
-from stable_baselines3.common.noise import OrnsteinUhlenbeckActionNoise
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList
+from stable_baselines3.common.noise import NormalActionNoise
+from wandb.integration.sb3 import WandbCallback
+from carla_remote_env import RemoteCarlaEnv
 
-# Proxy class to interact with the remote Carla environment
-class RemoteCarlaEnv(gym.Env):
-    def __init__(self):
-        super().__init__()
-        # Connect to the remote object published by the server
-        # change port
-        self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment") # for now, hardcoded port
+# --- Configuration ---
+TOTAL_TIMESTEPS = 500_000
+SAVE_FREQ = 100_000  # Save buffer & model every 100k steps
+PREVIOUS_RUN_ID = None # Set this string (e.g. "a1b2c3d4") to resume a crash
+WANDB_KEY = "232f438f252e30a2b8726b6acc2920339a1bbadd"
 
-        # define spaces due to serialization issues
-        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+# --- Setup Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+os.environ["WANDB_API_KEY"] = WANDB_KEY
 
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(35,), dtype=np.float32)
 
-    def step(self, action):
-        action = float(np.array(action).squeeze())
-        obs, reward, terminated, truncated, info = self.remote_env.step(action)
-        return np.array(obs), reward, terminated, truncated, info
+def get_latest_checkpoint(run_id):
+    """Finds the newest zip file in ./models/{run_id}/"""
+    ckpt_dir = f"./models/{run_id}"
+    if not os.path.exists(ckpt_dir): return None
 
-    def reset(self, seed=None, options=None):
-        obs_list, info = self.remote_env.reset()
-        print("OBS SHAPE:", len(obs_list))
-        print("OBS VALUES:", obs_list)
-        obs = np.array(obs_list, dtype=np.float32)
-        return obs, info
+    files = glob.glob(f"{ckpt_dir}/*.zip")
+    return max(files, key=os.path.getctime) if files else None
 
-    def close(self):
-        try:
-            self.remote_env.close()
-        except:
-            pass
 
-def train(env, timesteps):
+def train():
+    # 1. Initialize WandB & Environment
+    env = RemoteCarlaEnv()
+    run = wandb.init(
+        project="carla-rl",
+        id=PREVIOUS_RUN_ID,
+        resume="allow",
+        config={"policy": "TD3", "timesteps": TOTAL_TIMESTEPS},
+        sync_tensorboard=True
+    )
+
+    # 2. Paths
+    checkpoint_dir = f"./models/{run.id}"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # 3. Load or Create Model
+    latest_ckpt = get_latest_checkpoint(run.id)
     n_actions = env.action_space.shape[0]
-    # for exploration, noise = OU noise
-    action_noise = OrnsteinUhlenbeckActionNoise(
-        mean=np.zeros(n_actions),
-        sigma=0.1 * np.ones(n_actions),  # throttle/brake exploration
-        theta=0.1  # smoothness of changes
-    )
+    action_noise = NormalActionNoise(mean=np.zeros(n_actions), sigma=0.1 * np.ones(n_actions))
 
-    model = TD3(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,
-        batch_size=256,
-        tau=0.005,               # soft update
-        action_noise=action_noise,
-        verbose=1,
-        buffer_size=500_000,
-        tensorboard_log="./ddpg_carla_tensorboard/"
-    )
+    if latest_ckpt:
+        logger.info(f"🔄 RESUMING from checkpoint: {latest_ckpt}")
+        model = TD3.load(latest_ckpt, env=env)
+        model.action_noise = action_noise  # Re-attach noise
 
-    # Save checkpoints every 20k steps
-    # checkpoint_callback = CheckpointCallback(save_freq=20_000, save_path="./checkpoints/", name_prefix="ddpg_carla")
+        # Load Buffer (Critical for TD3 continuity)
+        buffer_path = latest_ckpt.replace(".zip", "_replay_buffer.pkl")
+        if os.path.exists(buffer_path):
+            logger.info("📦 Loading Replay Buffer...")
+            model.load_replay_buffer(buffer_path)
+    else:
+        logger.info(f"Starting FRESH training run: {run.id}")
+        model = TD3(
+            "MlpPolicy",
+            env,
+            learning_rate=3e-4,
+            buffer_size=200_000,
+            batch_size=256,
+            action_noise=action_noise,
+            verbose=1,
+            tensorboard_log=f"./runs/{run.id}"
+        )
 
-    model.learn(timesteps)
-    print("Training finished.")
+    # 4. Callbacks (Save every 100k steps)
+    callbacks = CallbackList([
+        CheckpointCallback(
+            save_freq=SAVE_FREQ,
+            save_path=checkpoint_dir,
+            name_prefix="td3_ckpt",
+            save_replay_buffer=True,  # Saves the heavy buffer for crash recovery
+            save_vecnormalize=True
+        ),
+        WandbCallback(gradient_save_freq=5000, verbose=2)
+    ])
 
-    model.save("ddpg_carla_final")
-    print("Model saved.")
+    # 5. Start Training
+    try:
+        logger.info("Training started...")
+        start_time = time.time()
+
+        model.learn(
+            total_timesteps=TOTAL_TIMESTEPS,
+            callback=callbacks,
+            reset_num_timesteps=False  # Keeps the progress bar correct on resume
+        )
+
+        # 6. Save Final Model to Root Folder
+        logger.info("Training Finished.")
+        final_path = f"td3_carla_{TOTAL_TIMESTEPS}"
+        model.save(final_path)
+        logger.info(f"Final model saved to: {os.path.abspath(final_path)}.zip")
+
+    except Exception:
+        logger.warning("Interrupt detected. Saving emergency checkpoint...")
+        model.save(f"{checkpoint_dir}/model_interrupted")
+        model.save_replay_buffer(f"{checkpoint_dir}/buffer_interrupted.pkl")
+    except KeyboardInterrupt:
+        logger.warning("KeyboardInterrupt detected. Saving nothing...")
+
+    finally:
+        env.close()
+        run.finish()
+        logger.info(f"Total Time: {(time.time() - start_time) // 60:.0f} minutes")
+
 
 if __name__ == '__main__':
-    env = RemoteCarlaEnv()
-    start = time.time()
-    train(env, 100_000)
-    end = time.time()
-    print("Training time:", (end - start) // 60, "minutes")
+    train()
