@@ -101,6 +101,9 @@ class CarlaEnv(gym.Env):
         """Spawns ego vehicle and attaches sensors (Run after map load)"""
         self.cleanup()
 
+        # 1. Set Random Weather
+        self._set_random_weather()
+
         # 2. Spawn Vehicle
         bp_lib = self.world.get_blueprint_library()
         vehicle_bp = bp_lib.filter('vehicle.tesla.model3')[0]
@@ -111,14 +114,12 @@ class CarlaEnv(gym.Env):
         if not self.ego_vehicle:
             raise RuntimeError("Failed to spawn vehicle")
 
-        # 3. Setup Sensors (Radar/Collision)
+        # 3. Setup Sensors (Collision)
         self._setup_sensors()
 
         # 4. Spawn Traffic
         self._spawn_traffic(10, 0)  # Spawn 10 vehicles, 0 walkers
 
-        # 5. Set Random Weather
-        self._set_random_weather()
 
         # 5. Setup Planners
         # Global route planner: Calculates the map path once
@@ -224,19 +225,36 @@ class CarlaEnv(gym.Env):
         """Sets a random weather preset for the simulation."""
         weather_presets = [
             carla.WeatherParameters.ClearNight,
-            carla.WeatherParameters.CloudyNoon,
-            carla.WeatherParameters.WetNoon,
-            carla.WeatherParameters.WetCloudyNoon,
-            carla.WeatherParameters.MidRainyNoon,
-            carla.WeatherParameters.HardRainNoon,
-            carla.WeatherParameters.SoftRainNoon,
+            carla.WeatherParameters.ClearNoon,
             carla.WeatherParameters.ClearSunset,
+
+            carla.WeatherParameters.CloudyNight,
+            carla.WeatherParameters.CloudyNoon,
             carla.WeatherParameters.CloudySunset,
-            carla.WeatherParameters.WetSunset,
-            carla.WeatherParameters.WetCloudySunset,
-            carla.WeatherParameters.MidRainSunset,
+
+            carla.WeatherParameters.Default,
+
+            carla.WeatherParameters.DustStorm,
+
+            carla.WeatherParameters.HardRainNight,
+            carla.WeatherParameters.HardRainNoon,
             carla.WeatherParameters.HardRainSunset,
+
+            carla.WeatherParameters.MidRainSunset,
+            carla.WeatherParameters.MidRainyNight,
+            carla.WeatherParameters.MidRainyNoon,
+
+            carla.WeatherParameters.SoftRainNight,
+            carla.WeatherParameters.SoftRainNoon,
             carla.WeatherParameters.SoftRainSunset,
+
+            carla.WeatherParameters.WetCloudyNight,
+            carla.WeatherParameters.WetCloudyNoon,
+            carla.WeatherParameters.WetCloudySunset,
+
+            carla.WeatherParameters.WetNight,
+            carla.WeatherParameters.WetNoon,
+            carla.WeatherParameters.WetSunset,
         ]
 
         weather = random.choice(weather_presets)
