@@ -11,10 +11,8 @@ Carla Pyro4 Server. Starts a Pyro4 Name Server and registers a CARLA environment
 
 CARLA_TIMEOUT = 120.0  # seconds
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(stream_handler)
 
 def nameserver():
     """

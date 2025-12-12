@@ -98,9 +98,10 @@ class CarlaEnv(gym.Env):
 
     def _setup_vehicle_sensors_traffic_weather(self):
         """ Sets up the vehicle, sensors, traffic, and weather in the CARLA world. """
+        # # 1. Set Random Weather
+        # self._set_random_weather()
 
-        # 1. Set Random Weather
-        self._set_random_weather()
+        self.cleanup()
 
         # 2. Spawn Vehicle
         bp_lib = self.world.get_blueprint_library()
@@ -363,6 +364,7 @@ class CarlaEnv(gym.Env):
             spawn_point = random.choice(spawn_points)
 
             self.ego_vehicle.set_transform(spawn_point)
+            self.world.tick()
             self.ego_vehicle.set_simulate_physics(True)
 
             self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0, hand_brake=True))
@@ -370,7 +372,6 @@ class CarlaEnv(gym.Env):
             for _ in range(WAIT_TICKS):
                 self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
                 self.world.tick()
-
 
             # 4. Route Generation
             # Smart destination: try to find a point far away
@@ -383,7 +384,6 @@ class CarlaEnv(gym.Env):
             self.collision_history = []
 
             waypoints, _ = self.get_waypoints()
-
             obs = self._get_obs(waypoints)
 
             return obs.tolist(), {}
@@ -582,7 +582,7 @@ class CarlaEnv(gym.Env):
 
         if self.traffic_actors:
             batch = [carla.command.DestroyActor(x) for x in self.traffic_actors]
-            self.client.apply_batch(batch)
+            self.client.apply_batch(batch, True)
             self.traffic_actors = []
 
     def close(self):
