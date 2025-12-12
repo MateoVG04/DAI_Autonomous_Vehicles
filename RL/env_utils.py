@@ -57,10 +57,10 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     # --- CONSTANTS ---
     MAX_LOOKAHEAD_DIST = 50.0  # Max physical range for waypoints (m)
     MAX_REF_LATERAL = lane_width / 2.0  # Max lateral offset for normalization (m)
-    REF_SPEED = 15.0  # Reference speed for normalization (~54 km/h)
-    REF_ACCEL = 10.0  # Reference acceleration (m/s²)
+    REF_SPEED = vehicle.get_speed_limit()  # Reference speed for normalization (~54 km/h)
+    REF_ACCEL = 6.0  # Reference acceleration (m/s²)
 
-    # --- 1. Waypoint Filtering & Transformation (Polar) ---
+    # --- 1. Waypoint Transformation (Polar) ---
 
     polar_coords = []
     local_coords = []

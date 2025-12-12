@@ -12,7 +12,6 @@ Carla Pyro4 Server. Starts a Pyro4 Name Server and registers a CARLA environment
 CARLA_TIMEOUT = 120.0  # seconds
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(stream_handler)
@@ -60,7 +59,7 @@ if __name__ == "__main__":
     # Start Name Server in background thread
     ns_thread = threading.Thread(target=nameserver, daemon=True)
     ns_thread.start()
-    logger.log(logging.INFO, "Name Server started on port 9090")
+    logger.info( "Name Server started on port 9090")
 
     # Carla setup
     client = setup()
@@ -74,7 +73,7 @@ if __name__ == "__main__":
     ns = Pyro4.locateNS(host="localhost", port=9090)
     uri = daemon.register(env, objectId="carla.environment")
     ns.register("carla.environment", uri)
-    logger.log(logging.INFO, "Carla environment registered with Name Server")
+    logger.info( "Carla environment registered with Name Server")
 
-    logger.log(logging.INFO, "CARLA Pyro server is now running...")
+    logger.info( "CARLA Pyro server is now running...")
     daemon.requestLoop()

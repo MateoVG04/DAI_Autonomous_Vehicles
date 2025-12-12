@@ -18,20 +18,20 @@ logger.addHandler(stream_handler)
 # Constants
 EPISODES = 1500
 WAIT_TICKS = 15
-SPAWN_VEHICLES = 10
+SPAWN_VEHICLES = 20
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
     """
     CARLA Gym Environment for DRL-based Autonomous Driving.
-    This environment uses a CARLA vehicle and world instance to provide a Gym-compatible interface
-    for training DRL agents. The agent controls throttle and brake, while steering is managed by a Local Planner.
+    This environment uses a CARLA client to provide a Gym-compatible interface for training DRL agents.
+    The agent controls throttle and brake, while steering is managed by a Local Planner.
     Observation Space:
-        - Future Waypoints (15 x 2): Local coordinates of the next 15 waypoints.
+        - Future Waypoints (15 x 2): Local coordinates (x, y) of the next 15 waypoints.
         - Speed (1): Current speed of the vehicle (m/s).
         - Acceleration (1): Current acceleration of the vehicle (m/s²).
         - Steering (1): Current steering command applied by the agent [-1, 1].
-        - Distance to Object Ahead (1): Distance to the nearest object ahead (m).
+        - Distance to vehicle Ahead (1): Distance to the vehicle object ahead (m).
     Action Space:
         - Throttle/Brake (1): Continuous value in [-1, 1], where positive values indicate throttle
           and negative values indicate braking.
@@ -90,15 +90,14 @@ class CarlaEnv(gym.Env):
         logger.info("CarlaEnv initialized")
 
     def _init_world_settings(self):
-        """Re-apply settings after loading a map"""
+        """Apply settings after loading a map"""
         settings = self.world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05
         self.world.apply_settings(settings)
 
     def _setup_vehicle_sensors_traffic_weather(self):
-        """Spawns ego vehicle and attaches sensors (Run after map load)"""
-        self.cleanup()
+        """ Sets up the vehicle, sensors, traffic, and weather in the CARLA world. """
 
         # 1. Set Random Weather
         self._set_random_weather()
@@ -117,17 +116,20 @@ class CarlaEnv(gym.Env):
         self._setup_sensors()
 
         # 4. Spawn Traffic
-        self._spawn_traffic(10, 0)  # Spawn 10 vehicles, 0 walkers
+        self._spawn_traffic(SPAWN_VEHICLES, 0)
 
         # 5. Setup Planners
         self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=2.0)
         self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
-            'target_speed': 54, # km/h
-            'sampling_radius': 2.0,
+            'target_speed': self.ego_vehicle.get_speed_limit(), # km/h
+            'sampling_radius': 3.0,
             'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
         })
 
+        logging.info("Vehicle, sensors, traffic, and weather setup complete.")
+
     def _setup_sensors(self):
+        """ Sets up the vehicle sensors: Collision sensor and RGB camera. """
 
         # Collision
         bp_col = self.world.get_blueprint_library().find('sensor.other.collision')
@@ -149,6 +151,8 @@ class CarlaEnv(gym.Env):
         )
         self.camera_sensor.listen(self.camera_callback)
 
+        logging.info("Sensors setup complete.")
+
     def collision_callback(self, event):
         self.collision_history.append(event)
 
@@ -160,7 +164,7 @@ class CarlaEnv(gym.Env):
         self.latest_rgb = rgb
         self.latest_frame_id = image.frame
 
-    def _spawn_traffic(self, n_vehicles=10, n_walkers=0):
+    def _spawn_traffic(self, n_vehicles, n_walkers=0):
         """
         Spawns vehicles and pedestrians in the simulation.
         :param n_vehicles: Number of cars to spawn.
@@ -259,9 +263,7 @@ class CarlaEnv(gym.Env):
 
 
     def _get_gt_distance(self, range_limit=50.0):
-        """
-        Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
-        """
+        """ Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data """
         if not self.ego_vehicle:
             return range_limit
 
@@ -314,6 +316,14 @@ class CarlaEnv(gym.Env):
                     closest_dist = forward_dist
 
         return closest_dist
+
+    def get_waypoints(self):
+        """ Returns the next waypoints from the Local Planner. """
+        plan = self.lp.get_plan()
+        waypoints = [wp[0] for wp in plan]
+        wps = waypoints[:self.waypoints_size]
+
+        return wps, waypoints
 
     def reset(self, seed=None, options=None) -> tuple:
         """
@@ -372,11 +382,9 @@ class CarlaEnv(gym.Env):
             self.episode_step = 0
             self.collision_history = []
 
-            # 5. Get Observation (Using correct slicing)
-            plan = self.lp.get_plan()
-            waypoints = [wp[0] for wp in plan]
-            wps = waypoints[:self.waypoints_size]
-            obs = self._get_obs(wps)
+            waypoints, _ = self.get_waypoints()
+
+            obs = self._get_obs(waypoints)
 
             return obs.tolist(), {}
         except Exception as e:
@@ -421,22 +429,20 @@ class CarlaEnv(gym.Env):
             self.episode_step += 1
 
             # 4. GET WAYPOINTS & DISTANCE
-            plan = self.lp.get_plan()
-            waypoints = [wp[0] for wp in plan]
-            wps = waypoints[:self.waypoints_size]
+            waypoints, all_waypoints = self.get_waypoints()
             self.distance_ahead = self._get_gt_distance()
 
             # 5. VISUALIZATION
-            if self.episode_step % 2 == 0 and waypoints:
+            if self.episode_step % 2 == 0 and all_waypoints:
                 # Visualize the last waypoint to see destination reached
                 self.world.debug.draw_point(
-                    waypoints[-1].transform.location + carla.Location(z=2),
+                    all_waypoints[-1].transform.location + carla.Location(z=2),
                     size=0.5, color=carla.Color(0, 0, 255), life_time=0.1
                 )
 
             # 6. OBSERVATION & REWARD
-            obs = self._get_obs(wps)
-            reward, terminated = self._compute_reward(wps)
+            obs = self._get_obs(waypoints)
+            reward, terminated = self._compute_reward(waypoints)
             truncated = self.episode_step > EPISODES
 
             self._render_hud(reward)
@@ -484,15 +490,12 @@ class CarlaEnv(gym.Env):
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
             return -200.0, True
 
-        # 2. Get Data
+        # Get speed and speed limit
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
-
-        # Dynamic Speed Limit
         speed_limit_kmh = self.ego_vehicle.get_speed_limit()
         target_speed = max(5.0, speed_limit_kmh / 3.6)
 
-        # 3. ACC Logic
-        # 2-second rule + buffer
+        # 3. Safe distance: 2-second rule + buffer
         safe_dist = max(5.0, speed * 2.0)
         dist_to_lead = self.distance_ahead
 
@@ -527,7 +530,7 @@ class CarlaEnv(gym.Env):
         else:
             reward -= 2.0
 
-        # 4. G-Force (FIX 2: Coordinate Transformation)
+        # 4. G-Force
         # We must project the world acceleration onto the car's local vectors
         accel_vec = self.ego_vehicle.get_acceleration()
         ego_tf = self.ego_vehicle.get_transform()
@@ -547,13 +550,13 @@ class CarlaEnv(gym.Env):
         if long_g > 0.5:
             reward -= (long_g ** 2) * 1.0
 
-        # 5. Stopping Penalty (FIX 3: Context Aware)
+        # 5. Stopping Penalty
         # Only punish stopping if the road is CLEAR.
         # If there is a car ahead (dist < 20), stopping is allowed (and rewarded by speed logic).
         if speed < 0.1 and dist_to_lead > 20.0:
             reward -= 5.0
 
-        # Goal
+        # 6. Goal
         if self.lp.done():
             reward += 500.0
             terminated = True
@@ -562,28 +565,25 @@ class CarlaEnv(gym.Env):
 
     def cleanup(self):
         """Destroys current actors cleanly."""
-        # 1. CLEANUP SENSORS
+        # SAFE CLEANUP
         if self.col_sensor and self.col_sensor.is_alive:
-            if self.col_sensor.is_listening:  # <--- CRITICAL CHECK
-                self.col_sensor.stop()
+            if self.col_sensor.is_listening: self.col_sensor.stop()
             self.col_sensor.destroy()
+            self.col_sensor = None
 
-        # 2. CLEANUP VEHICLE
+        if self.camera_sensor and self.camera_sensor.is_alive:
+            if self.camera_sensor.is_listening: self.camera_sensor.stop()
+            self.camera_sensor.destroy()
+            self.camera_sensor = None
+
         if self.ego_vehicle and self.ego_vehicle.is_alive:
             self.ego_vehicle.destroy()
+            self.ego_vehicle = None
 
-        # 3. CLEANUP TRAFFIC
-        if not self.traffic_actors:
-            return
-
-        logger.info(f"Destroying {len(self.traffic_actors)} traffic vehicles...")
-
-        # Use batch command for instant destruction
-        batch = [carla.command.DestroyActor(x) for x in self.traffic_actors]
-        self.client.apply_batch(batch)
-
-        # Clear the list
-        self.traffic_actors = []
+        if self.traffic_actors:
+            batch = [carla.command.DestroyActor(x) for x in self.traffic_actors]
+            self.client.apply_batch(batch)
+            self.traffic_actors = []
 
     def close(self):
         """
