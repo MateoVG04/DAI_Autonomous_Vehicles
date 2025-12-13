@@ -97,10 +97,25 @@ class RemoteCarlaEnv(gym.Env):
 
         return img_np, frame_id
 
-    def draw_detections(self, detections):
+    def draw_detections(self, detections, img_width=800, img_height=600):
         """
-        Draws simple 3D boxes + labels in the CARLA world for each detection.
-        `detections` is a list of dicts with keys: 'name' and 'conf'.
+        Forward YOLO detections to remote CarlaEnv for debug drawing.
+
+        detections: list of dicts with keys:
+            - "name": str
+            - "conf": float
+            - "bbox": [x1, y1, x2, y2]
         """
-        self.remote_env.draw_detections(detections)
+        # Make sure everything is built-in types (no numpy scalars)
+        safe_dets = []
+        for det in detections:
+            x1, y1, x2, y2 = det["bbox"]
+            safe_dets.append({
+                "name": str(det["name"]),
+                "conf": float(det["conf"]),
+                "bbox": [float(x1), float(y1), float(x2), float(y2)],
+            })
+
+        # Remote call – server will do world.debug drawing
+        self.remote_env.draw_detections(safe_dets, int(img_width), int(img_height))
 

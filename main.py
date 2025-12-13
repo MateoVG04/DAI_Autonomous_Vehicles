@@ -47,22 +47,24 @@ def main(env:RemoteCarlaEnv, RL_model_path: str, obj_model_path: str, max_steps:
         #print("latest image time: ", end - start)
         if img is not None:
             #start = time.time()
-            results = obj_detect_model.predict(img, verbose=False, conf=0.1)
-            print("results:", results)
+            results = obj_detect_model.predict(img, verbose=False, conf=0.4)
+            print(results)
             #end = time.time()
             #print("Model predict time: ", end - start)
             result = results[0]
             detections = []
             boxes = result.boxes
             if boxes is not None and len(boxes) > 0:
-                cls_list = boxes.cls.tolist()
-                conf_list = boxes.conf.tolist()
+                xyxy = boxes.xyxy.cpu().numpy()
+                cls = boxes.cls.cpu().numpy()
+                conf = boxes.conf.cpu().numpy()
 
-                for cls, conf in zip(cls_list, conf_list):
+                for (x1, y1, x2, y2), cls, conf in zip(xyxy, cls, conf):
                     name = result.names[int(cls)]
                     detections.append({
                         "name": name,
                         "conf": float(conf),
+                        "bbox": [float(x1), float(y1), float(x2), float(y2)],
                     })
 
             if detections:
@@ -86,6 +88,6 @@ def main(env:RemoteCarlaEnv, RL_model_path: str, obj_model_path: str, max_steps:
 if __name__ == "__main__":
     env = RemoteCarlaEnv()
     start = time.time()
-    main(env,"./RL/Model_TD3/td3_carla_500000", "./Machine_Vision/runs/Train5/best.pt", max_steps=100_000)
+    main(env,"./RL/Model_TD3/td3_carla_500000", "./Machine_Vision/runs/Train8/best.pt", max_steps=100_000)
     end = time.time()
     logger.info(f"Total wall time: {(end - start) / 60:.2f} minutes")

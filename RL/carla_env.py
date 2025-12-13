@@ -1,6 +1,7 @@
 import logging
 import random
 import numpy as np
+import cv2
 import Pyro4
 import carla
 import gymnasium as gym
@@ -638,47 +639,82 @@ class CarlaEnv(gym.Env):
         # Return only builtin types: bytes + tuple + int
         return img_bytes, (h, w, c), int(self.latest_frame_id)
 
-    def draw_detections(self, detections):
+    def draw_detections(self, detections, img_width=800, img_height=600):
         """
-        Draws simple 3D boxes + labels in the CARLA world for each detection.
-        `detections` is a list of dicts with keys: 'name' and 'conf'.
+        Draw 3D debug boxes in the CARLA world based on 2D YOLO detections.
+
+        detections: list of dicts:
+            {
+                "name": str,
+                "conf": float,
+                "bbox": [x1, y1, x2, y2]  # pixel coords in the camera image
+            }
+
+        img_width, img_height: resolution of the RGB camera image.
         """
         if self.ego_vehicle is None:
             return
 
-        ego_loc = self.ego_vehicle.get_location()
+        ego_tf = self.ego_vehicle.get_transform()
+        ego_loc = ego_tf.location
+        fwd = ego_tf.get_forward_vector()
+        right = ego_tf.get_right_vector()
 
-        for i, det in enumerate(detections):
-            label = f"{det['name']} {det['conf']:.2f}"
+        # Heuristic parameters
+        max_lateral = 6.0  # max +/- meters from center
+        min_dist = 8.0  # minimum distance in front of car
+        max_extra = 20.0  # extra distance when object is high in image
 
-            # Place each box in front of the ego vehicle, but offset sideways
-            # so they don't overlap (purely for visualization; not real 3D positions)
-            offset_x = 8.0  # 8 m in front of the vehicle
-            offset_y = (i - len(detections) / 2) * 2.0  # spread them left/right
+        for det in detections:
+            name = str(det.get("name", "obj"))
+            conf = float(det.get("conf", 0.0))
+            x1, y1, x2, y2 = det["bbox"]
+
+            # Center of the bbox in pixel coords
+            cx = 0.5 * (x1 + x2)
+            cy = 0.5 * (y1 + y2)
+
+            # Normalize horizontal position to [-1, 1]
+            nx = (cx / img_width) * 2.0 - 1.0  # left=-1, center=0, right=+1
+            # Normalize vertical position to [0, 1] (0=top, 1=bottom)
+            ny = cy / img_height
+
+            # Lateral offset: left/right in car frame
+            offset_y = nx * max_lateral
+
+            # Distance ahead: closer when near bottom of image
+            dist_ahead = min_dist + (1.0 - ny) * max_extra
+
+            # World position of the box center
             center = carla.Location(
-                x=ego_loc.x + offset_x,
-                y=ego_loc.y + offset_y,
+                x=ego_loc.x + fwd.x * dist_ahead + right.x * offset_y,
+                y=ego_loc.y + fwd.y * dist_ahead + right.y * offset_y,
                 z=ego_loc.z + 1.5
             )
 
-            # A small box representing the detection
-            extent = carla.Vector3D(1.0, 1.0, 1.0)
+            # Scale box size with bbox height (pure heuristic)
+            box_pix_height = max(y2 - y1, 1.0)
+            box_height_m = 1.0 + 3.0 * (box_pix_height / img_height)  # between ~1m and ~4m
+
+            extent = carla.Vector3D(0.8, box_height_m * 0.5, box_height_m * 0.5)
             bbox = carla.BoundingBox(center, extent)
 
-            # Draw green box
+            # Draw box
             self.world.debug.draw_box(
                 bbox,
-                carla.Rotation(),  # axis-aligned
+                ego_tf.rotation,  # aligned with ego
                 thickness=0.1,
-                color=carla.Color(0, 255, 0),
-                life_time=0.05  # refresh every tick
+                color=carla.Color(0, 0, 255),  # green
+                life_time=0.2
             )
 
             # Draw label above the box
+            label = f"{name} {conf:.2f}"
             self.world.debug.draw_string(
-                center + carla.Location(z=1.2),
+                center + carla.Location(z=extent.z + 0.5),
                 label,
-                draw_shadow=True,
-                color=carla.Color(255, 255, 255),
-                life_time=0.05
+                draw_shadow=False,
+                color=carla.Color(0, 0, 255),
+                life_time=0.2
             )
+
