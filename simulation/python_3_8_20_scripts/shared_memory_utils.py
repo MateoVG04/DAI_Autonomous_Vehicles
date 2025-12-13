@@ -134,7 +134,7 @@ class SharedMemoryManager:
 
     def write_data_at(self, shared_array_index: int, write_index: int, input_data: np.ndarray):
         shared_array = self.data_arrays[shared_array_index]
-        array = np.frombuffer(input_data, dtype=shared_array.datatype).ravel()
+        array = np.frombuffer(input_data, dtype=np.uint8).ravel()
         start = self.write_offset(buffer_index=shared_array_index, slot_index=write_index)
         end = start + self.data_arrays[shared_array_index].slot_size
         self._mm[start:end] = array
@@ -167,8 +167,8 @@ class CarlaWrapper:
     class CarlaDataType(IntEnum):
         images = 0
         object_detected = 1
-        waypoint = 3
-        lidar_points = 2
+        waypoint = 2
+        lidar_points = 3
 
     def __init__(self, filename, image_width: int, image_height: int, max_lidar_points: int):
         data_arrays = [
@@ -272,16 +272,11 @@ class CarlaWrapper:
         )
 
     def read_latest_lidar_points(self) -> np.ndarray:
-        slot_index =  0 # self.latest_lidar_index - 1
+        slot_index = self.latest_lidar_index - 1
         if slot_index == -1:
             slot_index = self.shared_memory.data_arrays[self.CarlaDataType.lidar_points.value].reserved_count - 1
-
-        # read raw 1D array
-        points_flat = self.shared_memory.read_data(
+        points = self.shared_memory.read_data(
             shared_array_index=self.CarlaDataType.lidar_points.value,
             slot_index=slot_index
         )
-
-        # reshape to 2D (N,4)
-        points = points_flat.reshape(-1, 4)
         return points

@@ -118,5 +118,5 @@ class LiDARManager:
 
         # Each point: x, y, z, intensity
         self.latest_points = data.raw_data
-        # self.latest_points = np.frombuffer(data.raw_data, dtype=np.float32).reshape(-1, 4)
-        # self.shared_memory.write_lidar_points(self.latest_points)
+        self.latest_points = np.frombuffer(data.raw_data, dtype=np.float32).reshape(-1, 4)
+        self.shared_memory.write_lidar_points(self.latest_points)

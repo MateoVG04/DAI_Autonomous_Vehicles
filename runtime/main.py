@@ -38,8 +38,6 @@ class MinimalHUD:
         self.clock = pygame.time.Clock()
         self.fps = 0.0
 
-        self.camera = camera
-        self.lidar = lidar
         self.shared_memory: CarlaWrapper = shared_memory
 
         # Persistent LiDAR surface for incremental rendering
@@ -61,8 +59,9 @@ class MinimalHUD:
             display.blit(camera_surf, (0, 0))
 
         # LiDAR
-        if self.lidar.latest_points is not None:
-            self._draw_lidar_incremental(self.lidar.latest_points)
+        lidar_points = self.shared_memory.read_latest_lidar_points()
+        if lidar_points is not None:
+            self._draw_lidar_incremental(lidar_points)
         display.blit(self.lidar_surface, (self.dim[0] // 2, 0))
 
         # HUD
@@ -99,9 +98,8 @@ class MinimalHUD:
         self.lidar_surface.blit(fade_surface, (0, 0))
 
         # ----- Convert raw points to numpy array
-        lidar_data = np.frombuffer(points, dtype=np.float32).reshape(-1, 4)
-        xyz = lidar_data[:, :3]
-        intensity = lidar_data[:, 3]
+        xyz = points[:, :3]
+        intensity = points[:, 3]
 
         # ----- Project X/Y to 2D surface
         x_scaled = ((xyz[:, 0] + max_range) / (2 * max_range)) * (width - 1)
@@ -339,7 +337,7 @@ def main():
     logger.info("Carla Client started setup finished")
 
     # shared mem
-    shared_memory_filepath = "/dev/shm/carla_shared_v2.dat"
+    shared_memory_filepath = "/dev/shm/carla_shared_v3.dat"
     shared_memory = CarlaWrapper(filename=shared_memory_filepath,
                                  image_width=camera_width,
                                  image_height=camera_height,
