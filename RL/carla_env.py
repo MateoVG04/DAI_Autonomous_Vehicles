@@ -16,7 +16,7 @@ stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(leveln
 logger.addHandler(stream_handler)
 
 # Constants
-EPISODES = 1500
+MAX_STEPS = 2000
 WAIT_TICKS = 15
 SPAWN_VEHICLES = 20
 
@@ -26,6 +26,7 @@ class CarlaEnv(gym.Env):
     CARLA Gym Environment for DRL-based Autonomous Driving.
     This environment uses a CARLA client to provide a Gym-compatible interface for training DRL agents.
     The agent controls throttle and brake, while steering is managed by a Local Planner.
+
     Observation Space:
         - Future Waypoints (15 x 2): Local coordinates (x, y) of the next 15 waypoints.
         - Speed (1): Current speed of the vehicle (m/s).
@@ -55,8 +56,18 @@ class CarlaEnv(gym.Env):
         self.world = self.client.get_world()
 
         # Map configuration
-        self.maps = ['Town01', 'Town02', 'Town03']
-        self.map_switch_freq = 20  # Switch every 20 episodes
+        self.maps = ['Town02', 'Town03', 'Town06', 'Town07']
+        """
+        Training maps:
+        Town02 = A small simple town with a mixture of residential and commercial buildings.
+        Town03 = A larger, urban map with a roundabout and large junctions.
+        Town06 = Long many lane highways with many highway entrances and exits. It also has a Michigan left.
+        Town07 = A rural environment with narrow roads, corn, barns and hardly any traffic lights.
+        
+        Test map: 
+        Town12 = A Large Map with numerous different regions, including high-rise, residential and rural environments.
+        """
+        self.map_switch_freq = 25  # Switch every 50 steps
         self.total_episodes = 0
 
         # Setup vehicle and sensors
@@ -71,23 +82,28 @@ class CarlaEnv(gym.Env):
         # Action: [Throttle/Brake] (Steering is handled by LocalPlanner)
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.waypoints_size = 15
-        self.lane_width = 3.5
+        self.lane_width = 3
 
         # Obs space size: Path (15*2) + Speed(1) + Accel(1) + Steer(1) + CTE(1) + DistAhead(1) = 35
         obs_size = self.waypoints_size * 2 + 5
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_size,), dtype=np.float32)
 
+        #
+        self.episode_step = 0
         self.distance_ahead = 50.0
+        self.collision_history = []
+
+        # Camera
         self.latest_rgb = None  # type: #Optional[np.ndarray]
         self.latest_frame_id = -1  # no frame received yet
-        self.collision_history = []
-        self.episode_step = 0
 
-        self.traffic_actors = []
+        #
+        self.traffic_actors = None
         self._init_world_settings()
-        self._setup_vehicle_sensors_traffic_weather()
+        self._init_traffic_manager()
+        self._load_map("Town02") # Start on first map
 
-        logger.info("CarlaEnv initialized")
+        logger.info("Carla environment initialized")
 
     def _init_world_settings(self):
         """Apply settings after loading a map"""
@@ -96,38 +112,66 @@ class CarlaEnv(gym.Env):
         settings.fixed_delta_seconds = 0.05
         self.world.apply_settings(settings)
 
-    def _setup_vehicle_sensors_traffic_weather(self):
-        """ Sets up the vehicle, sensors, traffic, and weather in the CARLA world. """
-        # # 1. Set Random Weather
-        # self._set_random_weather()
+    def _init_traffic_manager(self):
+        self.tm = self.client.get_trafficmanager(8000)
+        self.tm.set_synchronous_mode(True)
+        self.tm.set_hybrid_physics_mode(True)
+        self.tm.set_global_distance_to_leading_vehicle(3)
 
-        self.cleanup()
+    def _load_map(self, map_name: str):
+        logger.info(f"Loading map: {map_name}")
+        self._cleanup()
 
-        # 2. Spawn Vehicle
-        bp_lib = self.world.get_blueprint_library()
-        vehicle_bp = bp_lib.filter('vehicle.tesla.model3')[0]
-        spawn_points = self.world.get_map().get_spawn_points()
-        spawn_point = random.choice(spawn_points)
+        self.client.load_world(map_name)
+        self.world = self.client.get_world()
+        self._init_world_settings()
+        self._spawn_ego_vehicle()
+        self._spawn_traffic(SPAWN_VEHICLES)
+        self.world.tick()
 
-        self.ego_vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_point)
-        if not self.ego_vehicle:
-            raise RuntimeError("Failed to spawn vehicle")
+    def _spawn_ego_vehicle(self):
 
-        # 3. Setup Sensors (Collision & Camera)
+        self._cleanup_sensors()
+
+        bp = self.world.get_blueprint_library().filter('vehicle.tesla.model3')[0]
+        spawn = random.choice(self.world.get_map().get_spawn_points())
+
+        for _ in range(10):
+            self.ego_vehicle = self.world.try_spawn_actor(bp, spawn)
+            if self.ego_vehicle:
+                break
+
+        if self.ego_vehicle is None:
+            raise RuntimeError("Failed to spawn ego vehicle after 10 attempts")
+
         self._setup_sensors()
 
-        # 4. Spawn Traffic
-        self._spawn_traffic(SPAWN_VEHICLES, 0)
-
-        # 5. Setup Planners
-        self.grp = GlobalRoutePlanner(self.world.get_map(), sampling_resolution=2.0)
-        self.lp = LocalPlanner(self.ego_vehicle, opt_dict={
-            'target_speed': self.ego_vehicle.get_speed_limit(), # km/h
+        self.grp = GlobalRoutePlanner(self.world.get_map(), 2.0)
+        self.lp = LocalPlanner(self.ego_vehicle, {
+            'target_speed': 50,
             'sampling_radius': 3.0,
-            'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}  # Soft steering
+            'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}
         })
 
-        logging.info("Vehicle, sensors, traffic, and weather setup complete.")
+    def _reset_ego_pose(self):
+
+        # If ego is gone, respawn instead of resetting
+        if self.ego_vehicle is None or not self.ego_vehicle.is_alive:
+            logger.warning("Ego vehicle missing, respawning.")
+            self._cleanup_vehicle()
+            self._spawn_ego_vehicle()
+            return
+
+        spawn = random.choice(self.world.get_map().get_spawn_points())
+        self.ego_vehicle.set_transform(spawn)
+        self.ego_vehicle.set_simulate_physics(True)
+
+        self.ego_vehicle.apply_control(
+            carla.VehicleControl(throttle=0, brake=1.0, hand_brake=True)
+        )
+
+        for _ in range(WAIT_TICKS):
+            self.world.tick()
 
     def _setup_sensors(self):
         """ Sets up the vehicle sensors: Collision sensor and RGB camera. """
@@ -165,19 +209,13 @@ class CarlaEnv(gym.Env):
         self.latest_rgb = rgb
         self.latest_frame_id = image.frame
 
-    def _spawn_traffic(self, n_vehicles, n_walkers=0):
+    def _spawn_traffic(self, n_vehicles):
         """
-        Spawns vehicles and pedestrians in the simulation.
+        Spawns vehicles in the simulation.
         :param n_vehicles: Number of cars to spawn.
-        :param n_walkers: Number of pedestrians to spawn.
         """
-        logging.info(f"Spawning {n_vehicles} vehicles and {n_walkers} walkers...")
 
-        # 1. Get Traffic Manager
-        tm = self.client.get_trafficmanager(8000)  # Default port
-        tm.set_global_distance_to_leading_vehicle(2.5)
-        tm.set_hybrid_physics_mode(True)  # Optimization
-        tm.set_synchronous_mode(True)
+        logging.info(f"Spawning {n_vehicles} vehicles.")
 
         # 2. Get Blueprints
         bp_lib = self.world.get_blueprint_library()
@@ -187,11 +225,11 @@ class CarlaEnv(gym.Env):
         vehicle_bps = [x for x in vehicle_bps if int(x.get_attribute('number_of_wheels')) > 3]
 
         # 3. Spawn Vehicles
-        spawn_points = self.world.get_map().get_spawn_points()
-        for sp in spawn_points:
-            if sp == self.ego_vehicle.get_transform():
-                spawn_points.remove(sp)
-                break
+        ego_loc = self.ego_vehicle.get_location()
+        spawn_points = [
+            sp for sp in self.world.get_map().get_spawn_points()
+            if sp.location.distance(ego_loc) > 5.0
+        ]
         n_vehicles = min(n_vehicles, len(spawn_points))
         random.shuffle(spawn_points)
 
@@ -207,7 +245,7 @@ class CarlaEnv(gym.Env):
 
             # Prepare spawn command
             batch.append(carla.command.SpawnActor(bp, spawn_points[i])
-                         .then(carla.command.SetAutopilot(carla.command.FutureActor, True, tm.get_port())))
+                         .then(carla.command.SetAutopilot(carla.command.FutureActor, True, self.tm.get_port())))
 
         # Execute Batch
         results = self.client.apply_batch_sync(batch, True)
@@ -215,52 +253,6 @@ class CarlaEnv(gym.Env):
         # Collect actors
         self.traffic_actors = [r.actor_id for r in results if not r.error]
         logger.info(f"Successfully spawned {len(self.traffic_actors)} vehicles.")
-
-        # 4. Spawn Walkers (Extra)
-        if n_walkers > 0:
-            # (Walker spawning is more complex: needs Controller + Walker actor)
-            # Keeping it simple: Just spawn points navigation for now
-            pass
-
-    def _set_random_weather(self):
-        """Sets a random weather preset for the simulation."""
-        weather_presets = [
-            carla.WeatherParameters.ClearNight,
-            carla.WeatherParameters.ClearNoon,
-            carla.WeatherParameters.ClearSunset,
-
-            carla.WeatherParameters.CloudyNight,
-            carla.WeatherParameters.CloudyNoon,
-            carla.WeatherParameters.CloudySunset,
-
-            carla.WeatherParameters.Default,
-
-            carla.WeatherParameters.DustStorm,
-
-            carla.WeatherParameters.HardRainNight,
-            carla.WeatherParameters.HardRainNoon,
-            carla.WeatherParameters.HardRainSunset,
-
-            carla.WeatherParameters.MidRainSunset,
-            carla.WeatherParameters.MidRainyNight,
-            carla.WeatherParameters.MidRainyNoon,
-
-            carla.WeatherParameters.SoftRainNight,
-            carla.WeatherParameters.SoftRainNoon,
-            carla.WeatherParameters.SoftRainSunset,
-
-            carla.WeatherParameters.WetCloudyNight,
-            carla.WeatherParameters.WetCloudyNoon,
-            carla.WeatherParameters.WetCloudySunset,
-
-            carla.WeatherParameters.WetNight,
-            carla.WeatherParameters.WetNoon,
-            carla.WeatherParameters.WetSunset,
-        ]
-
-        weather = random.choice(weather_presets)
-        self.world.set_weather(weather)
-        logger.info("Weather updated to random preset.")
 
 
     def _get_gt_distance(self, range_limit=50.0):
@@ -313,7 +305,7 @@ class CarlaEnv(gym.Env):
             # - Must be in our lane (abs(lateral_dist) < half_lane_width)
             #   Assuming lane width ~3.5m, half is 1.75m. We use 1.5m to be strict.
             if 0 < forward_dist < closest_dist:
-                if abs(lateral_dist) < 1.75:
+                if abs(lateral_dist) < 1.5:
                     closest_dist = forward_dist
 
         return closest_dist
@@ -350,24 +342,15 @@ class CarlaEnv(gym.Env):
                 new_map_name = self.maps[map_index]
                 logger.info(f"Switching Map to {new_map_name}...")
 
-                self.cleanup()
-                self.client.load_world(new_map_name)
-                self.world = self.client.get_world()
-                self._init_world_settings()
-                self._setup_vehicle_sensors_traffic_weather() # Respawn vehicle and sensors and traffic and weather
+                self._load_map(self.maps[map_index])
+
+            else:
+                self._reset_ego_pose()
 
             # 2. Reset Actor State
             if not self.ego_vehicle or not self.ego_vehicle.is_alive:
-                self._setup_vehicle_sensors_traffic_weather()
+                self._spawn_ego_vehicle()
 
-            spawn_points = self.world.get_map().get_spawn_points()
-            spawn_point = random.choice(spawn_points)
-
-            self.ego_vehicle.set_transform(spawn_point)
-            self.world.tick()
-            self.ego_vehicle.set_simulate_physics(True)
-
-            self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0, hand_brake=True))
             # 3. Settle Physics
             for _ in range(WAIT_TICKS):
                 self.ego_vehicle.apply_control(carla.VehicleControl(throttle=0.0, steer=0.0, brake=1.0))
@@ -375,13 +358,13 @@ class CarlaEnv(gym.Env):
 
             # 4. Route Generation
             # Smart destination: try to find a point far away
-            dest_tf = random.choice(spawn_points)
-            route = self.grp.trace_route(spawn_point.location, dest_tf.location)
+            dest_tf = random.choice(self.world.get_map().get_spawn_points())
+            route = self.grp.trace_route(self.ego_vehicle.get_location(), dest_tf.location)
             self.lp.set_global_plan(route)
 
+            self.collision_history.clear()
             self.distance_ahead = self._get_gt_distance()
             self.episode_step = 0
-            self.collision_history = []
 
             waypoints, _ = self.get_waypoints()
             obs = self._get_obs(waypoints)
@@ -412,6 +395,8 @@ class CarlaEnv(gym.Env):
             Exception: Any unexpected runtime error is logged and re-raised for debugging.
         """
         try:
+
+
             # 1. ACTION
             a = float(np.array(action).squeeze())
             throttle = float(np.clip(a, 0.0, 1.0)) if a > 0 else 0.0
@@ -443,7 +428,7 @@ class CarlaEnv(gym.Env):
             # 6. OBSERVATION & REWARD
             obs = self._get_obs(waypoints)
             reward, terminated = self._compute_reward(waypoints)
-            truncated = self.episode_step > EPISODES
+            truncated = self.episode_step >= MAX_STEPS
 
             self._render_hud(reward)
 
@@ -512,7 +497,7 @@ class CarlaEnv(gym.Env):
 
                 # Optional: Extra penalty for being dangerously close (Tailgating)
                 if dist_to_lead < safe_dist * 0.5:
-                    reward -= 1.0
+                    reward -= 10.0
             else:
                 # FREE FLOW MODE:
                 effective_target_speed = target_speed
@@ -524,7 +509,7 @@ class CarlaEnv(gym.Env):
             r_speed = np.exp(-0.1 * speed_diff ** 2)
             reward += r_speed
 
-            # Lane Centering
+            # # Lane Centering
             dist_center = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
             reward -= dist_center * 0.1
         else:
@@ -550,11 +535,17 @@ class CarlaEnv(gym.Env):
         if long_g > 0.5:
             reward -= (long_g ** 2) * 1.0
 
-        # 5. Stopping Penalty
-        # Only punish stopping if the road is CLEAR.
-        # If there is a car ahead (dist < 20), stopping is allowed (and rewarded by speed logic).
-        if speed < 0.1 and dist_to_lead > 20.0:
-            reward -= 5.0
+        is_blocked_by_traffic = dist_to_lead < safe_dist
+        is_road_clear = dist_to_lead > 30.0
+        is_stopped = speed < 1
+
+        # Good stop (traffic)
+        if is_stopped and is_blocked_by_traffic:
+            reward += 2.0
+
+        # Bad stop (empty road)
+        if is_stopped and is_road_clear:
+            reward -= min(0.05 * self.episode_step, 20.0)
 
         # 6. Goal
         if self.lp.done():
@@ -563,9 +554,14 @@ class CarlaEnv(gym.Env):
 
         return reward, terminated
 
-    def cleanup(self):
+    def _cleanup(self):
         """Destroys current actors cleanly."""
         # SAFE CLEANUP
+        self._cleanup_vehicle()
+        self._cleanup_sensors()
+        self._cleanup_traffic()
+
+    def _cleanup_sensors(self):
         if self.col_sensor and self.col_sensor.is_alive:
             if self.col_sensor.is_listening: self.col_sensor.stop()
             self.col_sensor.destroy()
@@ -576,55 +572,58 @@ class CarlaEnv(gym.Env):
             self.camera_sensor.destroy()
             self.camera_sensor = None
 
+    def _cleanup_vehicle(self):
         if self.ego_vehicle and self.ego_vehicle.is_alive:
             self.ego_vehicle.destroy()
             self.ego_vehicle = None
 
-        if self.traffic_actors:
+    def _cleanup_traffic(self):
+        if self.traffic_actors is not None:
             batch = [carla.command.DestroyActor(x) for x in self.traffic_actors]
             self.client.apply_batch(batch, True)
             self.traffic_actors = []
+
 
     def close(self):
         """
         Cleans up actors, sensors and other resources.
         :return: None
         """
-        self.cleanup()
+        self._cleanup()
 
-    # Debugging purposes: Render HUD
     def _render_hud(self, reward: float):
-        # 1. Get Real Control Values (What the car is actually doing)
         ctrl = self.ego_vehicle.get_control()
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
         accel = self.ego_vehicle.get_acceleration()
-        # 2. Get Car Location to place text
-        loc = self.ego_vehicle.get_location()
+
+        tf = self.ego_vehicle.get_transform()
+        loc = tf.location
+        right = tf.get_right_vector()
+        up = carla.Vector3D(0, 0, 1)
 
         gforce = np.sqrt(accel.x ** 2 + accel.y ** 2) / 9.81
 
-        # 3. Define the text lines (Bottom to Top)
         info_text = [
             f"Speed: {speed * 3.6:.1f} km/h",
-            f"speed_limit: {self.ego_vehicle.get_speed_limit():.1f} km/h",
+            f"Speed limit: {self.ego_vehicle.get_speed_limit():.1f} km/h",
             f"Steer: {ctrl.steer:.2f}",
             f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
             f"GForce: {gforce:.2f} g",
-            f"distAhead: {self.distance_ahead:.2f} m",
+            f"DistAhead: {self.distance_ahead:.2f} m",
             f"Reward: {reward:.2f}",
-            f"Episode: {self.episode_step}"
+            f"Episode step: {self.episode_step}",
         ]
 
-        # 4. Draw the strings in the world
-        # We stack them vertically by increasing Z
+        base = loc + up * 2.5 + right * 1.5  # anchor point
+
         for i, line in enumerate(info_text):
+            pos = base + up * (0.35 * i)
             self.world.debug.draw_string(
-                # Position: 2 meters above car, slightly offset per line
-                carla.Location(x=loc.x, y=loc.y, z=loc.z + 2.0 + (i * 0.5)),
+                pos,
                 line,
                 draw_shadow=True,
-                color=carla.Color(255, 255, 255),  # White text
-                life_time=0.05  # Update every frame (assuming 20fps)
+                color=carla.Color(255, 255, 255),
+                life_time=0.05
             )
 
     def get_latest_image(self):
