@@ -258,6 +258,53 @@ def setup_vehicle(world):
     actor.apply_physics_control(physics_control)
     return actor
 
+
+def spawn_traffic(client, world, amount=60):
+    logger = logging.getLogger()
+
+    # 1. Setup Traffic Manager
+    tm = client.get_trafficmanager()
+    tm.set_global_distance_to_leading_vehicle(2.5)
+    tm.set_synchronous_mode(True)  # Match your simulation setting
+
+    # 2. Get Blueprints
+    blueprints = world.get_blueprint_library().filter("vehicle.*")
+    blueprints = [x for x in blueprints if int(x.get_attribute('number_of_wheels')) == 4]
+
+    # 3. Get Spawn Points
+    spawn_points = world.get_map().get_spawn_points()
+    number_of_spawn_points = len(spawn_points)
+
+    if amount > number_of_spawn_points:
+        amount = number_of_spawn_points
+
+    # 4. Spawn Vehicles
+    batch = []
+    for n, transform in enumerate(spawn_points):
+        if n >= amount:
+            break
+        blueprint = random.choice(blueprints)
+        if blueprint.has_attribute('color'):
+            color = random.choice(blueprint.get_attribute('color').recommended_values)
+            blueprint.set_attribute('color', color)
+
+        # "Autopilot" means the Traffic Manager controls it
+        blueprint.set_attribute('role_name', 'autopilot')
+
+        batch.append(carla.command.SpawnActor(blueprint, transform)
+                     .then(carla.command.SetAutopilot(carla.command.FutureActor, True, tm.get_port())))
+
+    # 5. Execute Batch
+    results = client.apply_batch_sync(batch, True)
+
+    # 6. Return vehicles IDs
+    vehicles_id_list = []
+    for response in results:
+        if not response.error:
+            vehicles_id_list.append(response.actor_id)
+    logger.info(f"Spawned {len(vehicles_id_list)} NPC vehicles.")
+    return vehicles_id_list
+
 def record_world(world):
     amount_of_vehicles = world.get_actors().filter("*vehicle*")
 
@@ -365,6 +412,8 @@ def main():
     world = carla_client.get_world()
     vehicle = setup_vehicle(world=world)
 
+    npc_ids = spawn_traffic(carla_client, world, amount=50)
+
     world.tick()  # fixme test if this is required
 
     logger.info("Setting up cameras")
@@ -465,6 +514,11 @@ def main():
             for sensor in camera.sensors:
                 sensor.stop()
                 sensor.destroy()
+        except Exception as e:
+            logger.warning(e)
+
+        try:
+            carla_client.apply_batch([carla.command.DestroyActor(x) for x in npc_ids])
         except Exception as e:
             logger.warning(e)
 
