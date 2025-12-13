@@ -25,7 +25,7 @@ class SharedMemoryArray:
         self.reserved_count = reserved_count
         self.datatype = datatype
 
-        self.datatype_size = {np.uint8: 1, np.float64: 8}[datatype]
+        self.datatype_size = {np.uint8: 1, np.float32: 4, np.float64: 8}[datatype]
 
         self.current_write_index = 0
 
@@ -168,8 +168,9 @@ class CarlaWrapper:
         images = 0
         object_detected = 1
         waypoint = 3
+        lidar_points = 2
 
-    def __init__(self, filename, image_width: int, image_height: int):
+    def __init__(self, filename, image_width: int, image_height: int, max_lidar_points: int):
         data_arrays = [
             SharedMemoryArray(data_shape=[image_height, image_width, 3], # Raw images
                               reserved_count=100,
@@ -180,9 +181,14 @@ class CarlaWrapper:
             SharedMemoryArray(data_shape=[33], # 33 for now
                                 reserved_count=100,
                                 datatype=np.float64),
+            SharedMemoryArray(data_shape=[max_lidar_points, 4],  # LiDAR points x, y, z, intensity
+                              reserved_count=100,
+                              datatype=np.float32),
         ]
         self.shared_memory = SharedMemoryManager(filename=filename,
                                                  data_arrays=data_arrays)
+
+        self.max_lidar_points = max_lidar_points
 
     def clear(self):
         self.shared_memory.clear()
@@ -241,3 +247,41 @@ class CarlaWrapper:
 
     def read_waypoints(self) -> np.ndarray:
         return self.shared_memory.read_data_array(shared_array_index=self.CarlaDataType.waypoint.value)
+
+    # ----- LiDAR
+    @property
+    def latest_lidar_index(self) -> int:
+        return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.lidar_points.value)
+
+    def write_lidar_points(self, points: np.ndarray):
+        """
+        Write a LiDAR frame to shared memory.
+        Points shape: (N,4) with x,y,z,intensity
+        Will truncate if N > MAX_LIDAR_POINTS
+        """
+        points = np.ascontiguousarray(points[:self.max_lidar_points], dtype=np.float32)
+
+        # Pad with zeros if less points than max
+        if points.shape[0] < self.max_lidar_points:
+            pad = np.zeros((self.max_lidar_points - points.shape[0], 4), dtype=np.float32)
+            points = np.vstack((points, pad))
+
+        self.shared_memory.write_data(
+            shared_array_index=self.CarlaDataType.lidar_points.value,
+            input_data=points
+        )
+
+    def read_latest_lidar_points(self) -> np.ndarray:
+        slot_index =  0 # self.latest_lidar_index - 1
+        if slot_index == -1:
+            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.lidar_points.value].reserved_count - 1
+
+        # read raw 1D array
+        points_flat = self.shared_memory.read_data(
+            shared_array_index=self.CarlaDataType.lidar_points.value,
+            slot_index=slot_index
+        )
+
+        # reshape to 2D (N,4)
+        points = points_flat.reshape(-1, 4)
+        return points
