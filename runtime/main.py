@@ -18,6 +18,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.trace import Status, StatusCode
 
+import cv2
 from agents.navigation.basic_agent import BasicAgent
 import carla
 
@@ -59,9 +60,10 @@ class MinimalHUD:
     def render(self, display, vehicle, distance_to_dest: float):
         # Camera
         frame = self.shared_memory.read_latest_image()
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         if frame is not None:
             # Correct orientation
-            camera_surf = pygame.surfarray.make_surface(frame.transpose(1, 0, 2))
+            camera_surf = pygame.surfarray.make_surface(frame_rgb.transpose(1, 0, 2))
             display.blit(camera_surf, (0, 0))
 
         # LiDAR
