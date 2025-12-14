@@ -1,7 +1,6 @@
 import logging
 import random
 import numpy as np
-import cv2
 import Pyro4
 import carla
 import gymnasium as gym
@@ -18,8 +17,8 @@ logger.addHandler(stream_handler)
 
 # Constants
 MAX_STEPS = 2000
-WAIT_TICKS = 15
-SPAWN_VEHICLES = 20
+WAIT_TICKS = 50
+SPAWN_VEHICLES = 25
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -472,23 +471,21 @@ class CarlaEnv(gym.Env):
         reward = 0.0
         terminated = False
 
-        # 1. CRITICAL: Collision
+        # 1. Collision
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
             return -200.0, True
 
         # Get speed and speed limit
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
-        speed_limit_kmh = self.ego_vehicle.get_speed_limit()
-        target_speed = max(5.0, speed_limit_kmh / 3.6)
 
-        # 3. Safe distance: 2-second rule + buffer
+        speed_limit_kmh = self.ego_vehicle.get_speed_limit()
+        target_speed = speed_limit_kmh / 3.6
+
+        # 3. Speed and distance: 2-second rule + buffer
         safe_dist = max(5.0, speed * 2.0)
         dist_to_lead = self.distance_ahead
 
         if waypoints:
-            # --- FIX 1: Unified Reward Logic ---
-            # Instead of separate branches, we just change the TARGET speed.
-
             if dist_to_lead < safe_dist:
                 # TRAFFIC MODE:
                 # If we are too close, the target speed is NOT the limit.
@@ -498,7 +495,7 @@ class CarlaEnv(gym.Env):
 
                 # Optional: Extra penalty for being dangerously close (Tailgating)
                 if dist_to_lead < safe_dist * 0.5:
-                    reward -= 10.0
+                    reward -= 5.0
             else:
                 # FREE FLOW MODE:
                 effective_target_speed = target_speed
@@ -510,9 +507,6 @@ class CarlaEnv(gym.Env):
             r_speed = np.exp(-0.1 * speed_diff ** 2)
             reward += r_speed
 
-            # # Lane Centering
-            dist_center = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
-            reward -= dist_center * 0.1
         else:
             reward -= 2.0
 
@@ -536,9 +530,13 @@ class CarlaEnv(gym.Env):
         if long_g > 0.5:
             reward -= (long_g ** 2) * 1.0
 
+        # 5. Stopping
         is_blocked_by_traffic = dist_to_lead < safe_dist
         is_road_clear = dist_to_lead > 30.0
         is_stopped = speed < 1
+
+        reward += 0.5 * speed if is_blocked_by_traffic else 0.1 * speed
+
 
         # Good stop (traffic)
         if is_stopped and is_blocked_by_traffic:
@@ -546,7 +544,7 @@ class CarlaEnv(gym.Env):
 
         # Bad stop (empty road)
         if is_stopped and is_road_clear:
-            reward -= min(0.05 * self.episode_step, 20.0)
+            reward -= 3.0
 
         # 6. Goal
         if self.lp.done():
@@ -582,7 +580,7 @@ class CarlaEnv(gym.Env):
         if self.traffic_actors is not None:
             batch = [carla.command.DestroyActor(x) for x in self.traffic_actors]
             self.client.apply_batch(batch, True)
-            self.traffic_actors = []
+            self.traffic_actors = None
 
 
     def close(self):
