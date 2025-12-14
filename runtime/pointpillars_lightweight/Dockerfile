@@ -1,42 +1,56 @@
-# 1. Use Official PyTorch DEVEL image
-# - CUDA 12.1 (Supports RTX 5070 Ti)
-# - Devel version includes 'nvcc' (Required to compile PointPillars setup.py)
-# - More compatible with VMs (less AVX crashes than NVIDIA NGC images)
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-devel
+# 1. Use CUDA 12.8 Developer Image (Supports RTX 50-series / sm_120)
+FROM nvidia/cuda:12.8.0-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
-# 2. Install System Dependencies
+# We install 'python3-venv' to create our isolated environment.
 RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    cmake \
+    ninja-build \
+    git \
     libgl1 \
     libglib2.0-0 \
-    git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
-# 3. Copy Files
+# This creates a folder '/opt/venv' that holds python packages.
+RUN python3 -m venv /opt/venv
+# Activate the Environment Automatically
+# By adding the venv/bin to PATH, every command (pip, python) automatically uses it.
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch 2.9.0 with CUDA 12.8 Support
+# supports sm_120 architecture.
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    torch==2.9.0 \
+    torchvision==0.24.0 \
+    torchaudio==2.9.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# Copy Files
 COPY PointPillars/ /workspace/PointPillars/
 COPY requirements.txt /workspace/
 
-# 4. Install Dependencies
+RUN pip install --no-cache-dir -r /workspace/requirements.txt
+
 WORKDIR /workspace/PointPillars
 
-# We install requirements using the system PyTorch (No torch in requirements.txt!)
-RUN pip install --ignore-installed -r /workspace/requirements.txt
+# 12.0 is the specific architecture code for Blackwell consumer cards (RTX 50-series).
+RUN export TORCH_CUDA_ARCH_LIST="12.0" && \
+    export FORCE_CUDA="1" && \
+    python3 setup.py build_ext --inplace
 
-# 5. Compile Custom CUDA Kernels
-# This step requires the 'devel' image (nvcc must be present)
-RUN export TORCH_CUDA_ARCH_LIST="8.6" && python3 setup.py build_ext --inplace
-
-# 6. Prepare Runtime
+# Runtime
 WORKDIR /workspace
-# Copy inference.py to /workspace/inference.py
-COPY inference.py .
-
-# 7. Execution Setup
-# Add PointPillars to python path so the script can do "import pointpillars"
 ENV PYTHONPATH="${PYTHONPATH}:/workspace/PointPillars"
 
-CMD ["python3", "inference.py"]
+CMD ["python3", "run/inference.py"]

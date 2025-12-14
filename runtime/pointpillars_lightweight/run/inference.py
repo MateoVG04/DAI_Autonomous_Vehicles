@@ -6,7 +6,7 @@ from torch import Tensor
 
 from enum import IntEnum
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 import os
@@ -320,50 +320,83 @@ class PointPillarsML:
     def __init__(self, ckpt_path):
         self.logger = logging.getLogger("PointPillarsML")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         self.logger.info(f"Initializing model on {self.device}...")
 
         # 1. Define Model Settings (Must match what the model was trained with!)
         # These are standard KITTI settings used in zhulf0804's repo
-        self.CLASSES = ['Car', 'Pedestrian', 'Cyclist']
+        self.CLASSES = {
+            'Pedestrian': 0,
+            'Cyclist': 1,
+            'Car': 2
+        }
         self.pc_range = [0, -39.68, -3, 69.12, 39.68, 1]
         self.voxel_size = [0.16, 0.16, 4]
 
         # 2. Initialize the Network
-        self.model = PointPillars(nclasses=len(self.CLASSES),
-                                  voxel_size=self.voxel_size,
-                                  point_cloud_range=self.pc_range,
-                                  max_num_points=32,
-                                  max_voxels=(16000, 40000))
+        self.model = PointPillars(nclasses=len(self.CLASSES))
 
         # 3. Load Weights
         if not os.path.exists(ckpt_path):
             raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
-
         checkpoint = torch.load(ckpt_path, map_location=self.device)
         if not checkpoint:
             raise InvalidArgumentError(f"Could not open checkpoint at {ckpt_path}")
-        print(checkpoint)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.logger.info(f"Loaded checkpoint from {ckpt_path}")
+
+        self.model.load_state_dict(checkpoint)
+        self.logger.info("Model loaded successfully.")
 
         self.model.to(self.device)
+        self.logger.info(f"Model moved to {self.device}.")
+
         self.model.eval()
-        self.logger.info("Model loaded successfully.")
+        self.logger.info("Set to eval and ready to run")
+
+    @classmethod
+    def point_range_filter(cls,
+                           pts,
+                           point_range: Optional[list] = None):
+        """
+        Filter points that are outside the range required by PointPillars
+        """
+        point_range = point_range or [0, -39.68, -3, 69.12, 39.68, 1]
+
+        flag_x_low = pts[:, 0] > point_range[0]
+        flag_y_low = pts[:, 1] > point_range[1]
+        flag_z_low = pts[:, 2] > point_range[2]
+        flag_x_high = pts[:, 0] < point_range[3]
+        flag_y_high = pts[:, 1] < point_range[4]
+        flag_z_high = pts[:, 2] < point_range[5]
+        keep_mask = flag_x_low & flag_y_low & flag_z_low & flag_x_high & flag_y_high & flag_z_high
+        return pts[keep_mask]
 
     def preprocess(self, numpy_points):
         """
         Converts CARLA points (N, 4) -> PointPillars Tensor
         """
-        # 1. Coordinate Transform (CARLA -> KITTI)
+        points = numpy_points.copy()
+
+        # 1. Filter empty padding points (0,0,0,0) from shared memory
+        mask = np.any(points[:, :3] != 0, axis=1)
+        points = points[mask]
+
+        if len(points) == 0:
+            return None
+
+        # 2. Coordinate Transform (CARLA -> KITTI)
         # CARLA: x=front, y=right, z=up
         # KITTI: x=front, y=left, z=up
-        # Action: Flip Y axis
-        numpy_points[:, 1] = -numpy_points[:, 1]
+        points[:, 1] = -points[:, 1]
 
-        # 2. Convert to Tensor
-        points_tensor = torch.from_numpy(numpy_points).float()
+        # 3. Apply Point Range Filter (Crucial step from your example!)
+        # This removes points that are too far away or behind the car
+        points = self.point_range_filter(points)
 
-        # 3. Move to GPU
+        if len(points) == 0:
+            return None
+
+        # 4. Convert to Tensor and Move to GPU
+        points_tensor = torch.from_numpy(points).float()
         return points_tensor.to(self.device)
 
     def predict(self, points_tensors: List[Tensor]):
@@ -407,15 +440,25 @@ if __name__ == "__main__":
 
 
     logger.info("Starting loop")
-    while True:
-        point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
+    # while True:
+    point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
 
-        tensor_input = ml_engine.preprocess(point_cloud)
-        # todo do batching instead of only one frame (like 5->10 maybe?)
-        result = ml_engine.predict([tensor_input])
+    # fixme -> comment what preprocessing does
+    tensor_input = ml_engine.preprocess(point_cloud)
 
-        bboxes = result['lidar_bboxes'].cpu().numpy()  # [x, y, z, w, l, h, rot]
-        labels = result['labels'].cpu().numpy()  # [0, 1, 2] -> Car, Ped, Cyc
-        scores = result['scores'].cpu().numpy()  # 0.0 to 1.0
+    # todo do batching instead of only one frame (like 5->10 maybe?)
+    result = ml_engine.predict([tensor_input])
 
+    # fixme return object handling -> might not be required to do the instance check but idk how the library works
+    if isinstance(result, list):
+        if len(result) == 0:
+            ...
+        result = result[0]
+
+    if result:
+        bboxes = result['lidar_bboxes']  # [x, y, z, w, l, h, rot]
+        labels = result['labels']  # [0, 1, 2] -> Car, Ped, Cyc
+        scores = result['scores']  # 0.0 to 1.0
         logger.info(f"Found ${len(bboxes)} bboxes with these labels and scores: ${list(zip(labels, scores))}")
+    else:
+        logger.info("No bboxes found")

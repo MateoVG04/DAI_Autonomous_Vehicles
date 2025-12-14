@@ -81,36 +81,36 @@ services:
 #              capabilities: [gpu]
 
 # Pointpillars not working -> Model mismatch with GPU version so we would have to retrain from scratch
-#  pointpillars:
-#    build:
-#      context: ./pointpillars_lightweight
-#      dockerfile: Dockerfile
-#    image: pointpillars_light
-#
-#    working_dir: /workspace
-#    environment:
-#      - NVIDIA_VISIBLE_DEVICES=all
-#      - CUDA_LAUNCH_BLOCKING=1 # Helps debug cuda crashes if they happen
-#      - PYTHONUNBUFFERED=1
-#      - PYTHONPATH=/workspace/PointPillars
-#
-#    # 3D Point Clouds are heavy on shared memory.
-#    # We mirror your existing setup but bump the size slightly to be safe.
-#    shm_size: 4gb
-#    volumes:
-#      - ./pointpillars_lightweight/inference.py:/workspace/inference.py
-#      - /dev/shm:/dev/shm
-#    command: python3 inference.py
-#    # for PyTorch 3D data processing to avoid "OS Error: Bus error"
-#    ulimits:
-#      memlock: -1
-#      stack: 67108864
-#    stdin_open: true
-#    tty: true
-#    deploy:
-#      resources:
-#        reservations:
-#          devices:
-#            - driver: nvidia
-#              count: all
-#              capabilities: [ gpu ]
+  pointpillars:
+    build:
+      context: ./pointpillars_lightweight
+      dockerfile: Dockerfile
+    image: pointpillars_light
+
+    working_dir: /workspace
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_LAUNCH_BLOCKING=1 # Helps debug cuda crashes if they happen
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace/PointPillars
+
+    # 3D Point Clouds are heavy on shared memory.
+    # We mirror your existing setup but bump the size slightly to be safe.
+    shm_size: 4gb
+    volumes:
+      - ./pointpillars_lightweight/run:/workspace/run
+      - /dev/shm:/dev/shm
+    command: python3 run/inference.py
+    # for PyTorch 3D data processing to avoid "OS Error: Bus error"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
