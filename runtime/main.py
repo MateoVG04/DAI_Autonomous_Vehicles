@@ -139,6 +139,8 @@ class MinimalHUD:
         temp_surface = pygame.surfarray.make_surface(temp_array)
         temp_surface = pygame.transform.rotate(temp_surface, -90)  # align axes
 
+        temp_surface = pygame.transform.flip(temp_surface, True, True) # Flip twice so up means up
+
         # ----- Blend with persistent surface
         self.lidar_surface.blit(temp_surface, (0, 0), special_flags=pygame.BLEND_ADD)
 
