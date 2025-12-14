@@ -19,6 +19,7 @@ logger.addHandler(stream_handler)
 MAX_STEPS = 2000
 WAIT_TICKS = 50
 SPAWN_VEHICLES = 25
+MAP_CHANGE_FREQ = 25
 
 @Pyro4.expose
 class CarlaEnv(gym.Env):
@@ -56,18 +57,18 @@ class CarlaEnv(gym.Env):
         self.world = self.client.get_world()
 
         # Map configuration
-        self.maps = ['Town02', 'Town03', 'Town06', 'Town07']
+        self.maps = ['Town01_Opt', 'Town02_Opt', 'Town03_Opt', 'Town04_Opt']
         """
         Training maps:
+        Town01 = A small, simple town with a river and several bridges.
         Town02 = A small simple town with a mixture of residential and commercial buildings.
         Town03 = A larger, urban map with a roundabout and large junctions.
-        Town06 = Long many lane highways with many highway entrances and exits. It also has a Michigan left.
-        Town07 = A rural environment with narrow roads, corn, barns and hardly any traffic lights.
-        
+        Town04 = A small town embedded in the mountains with a special "figure of 8" infinite highway.
+
         Test map: 
-        Town12 = A Large Map with numerous different regions, including high-rise, residential and rural environments.
+        Town05 = Squared-grid town with cross junctions and a bridge. It has multiple lanes per direction. Useful to perform lane changes.
         """
-        self.map_switch_freq = 25  # Switch every 50 steps
+        self.map_switch_freq = MAP_CHANGE_FREQ  # Switch every 50 steps
         self.total_episodes = 0
 
         # Setup vehicle and sensors
@@ -101,7 +102,7 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = None
         self._init_world_settings()
         self._init_traffic_manager()
-        self._load_map("Town02") # Start on first map
+        self._load_map("Town01_Opt") # Start on first map
 
         logger.info("Carla environment initialized")
 
@@ -471,85 +472,80 @@ class CarlaEnv(gym.Env):
         reward = 0.0
         terminated = False
 
+        # --------------------------------------------------
         # 1. Collision
+        # --------------------------------------------------
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
-            return -200.0, True
+            return -10.0, True
 
-        # Get speed and speed limit
+        # --------------------------------------------------
+        # 2. Speed & traffic context
+        # --------------------------------------------------
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
+        speed_limit = self.ego_vehicle.get_speed_limit() / 3.6
 
-        speed_limit_kmh = self.ego_vehicle.get_speed_limit()
-        target_speed = speed_limit_kmh / 3.6
-
-        # 3. Speed and distance: 2-second rule + buffer
         safe_dist = max(5.0, speed * 2.0)
         dist_to_lead = self.distance_ahead
 
-        if waypoints:
-            if dist_to_lead < safe_dist:
-                # TRAFFIC MODE:
-                # If we are too close, the target speed is NOT the limit.
-                # The target speed is ZERO (or matching the lead car).
-                # This allows the "Speed Reward" below to reward us for slowing down.
-                effective_target_speed = 0.0
-
-                # Optional: Extra penalty for being dangerously close (Tailgating)
-                if dist_to_lead < safe_dist * 0.5:
-                    reward -= 5.0
-            else:
-                # FREE FLOW MODE:
-                effective_target_speed = target_speed
-
-            # --- Speed Reward (Applies to both modes) ---
-            # If Traffic Mode: We get points for slowing to 0.
-            # If Free Flow: We get points for hitting speed limit.
-            speed_diff = abs(speed - effective_target_speed)
-            r_speed = np.exp(-0.1 * speed_diff ** 2)
-            reward += r_speed
-
-        else:
-            reward -= 2.0
-
-        # 4. G-Force
-        # We must project the world acceleration onto the car's local vectors
-        accel_vec = self.ego_vehicle.get_acceleration()
-        ego_tf = self.ego_vehicle.get_transform()
-        fwd_vec = ego_tf.get_forward_vector()
-        right_vec = ego_tf.get_right_vector()
-
-        long_accel = accel_vec.dot(fwd_vec)
-        lat_accel = accel_vec.dot(right_vec)
-
-        long_g = abs(long_accel) / 9.81
-        lat_g = abs(lat_accel) / 9.81
-
-        # Swerving (Lateral) is bad
-        reward -= (lat_g ** 2) * 5.0
-
-        # Braking (Longitudinal) is okay if necessary, but punish jerky driving
-        if long_g > 0.5:
-            reward -= (long_g ** 2) * 1.0
-
-        # 5. Stopping
-        is_blocked_by_traffic = dist_to_lead < safe_dist
+        is_blocked = dist_to_lead < safe_dist
+        is_stopped = speed < 1.0
         is_road_clear = dist_to_lead > 30.0
-        is_stopped = speed < 1
 
-        reward += 0.5 * speed if is_blocked_by_traffic else 0.1 * speed
+        # --------------------------------------------------
+        # 3. Target speed logic (single source of truth)
+        # --------------------------------------------------
+        if is_blocked:
+            target_speed = 0.0
+        else:
+            target_speed = speed_limit
 
+        # Smooth bounded speed reward
+        speed_error = speed - target_speed
+        r_speed = np.exp(-0.5 * speed_error ** 2)  # ∈ (0, 1]
+        reward += r_speed
 
-        # Good stop (traffic)
-        if is_stopped and is_blocked_by_traffic:
-            reward += 2.0
+        # --------------------------------------------------
+        # 4. Lane centering (only if planner valid)
+        # --------------------------------------------------
+        if waypoints:
+            dist_center = waypoints[0].transform.location.distance(
+                self.ego_vehicle.get_location()
+            )
+            reward -= 0.2 * dist_center
+        else:
+            reward -= 1.0  # planner failure
 
-        # Bad stop (empty road)
-        if is_stopped and is_road_clear:
-            reward -= 3.0
+        # --------------------------------------------------
+        # 5. Comfort (G-forces)
+        # --------------------------------------------------
+        accel = self.ego_vehicle.get_acceleration()
+        tf = self.ego_vehicle.get_transform()
 
-        # 6. Goal
+        long_g = abs(accel.dot(tf.get_forward_vector())) / 9.81
+        lat_g = abs(accel.dot(tf.get_right_vector())) / 9.81
+
+        reward -= 1.5 * lat_g
+        reward -= 0.5 * max(0.0, long_g - 0.5)
+
+        # --------------------------------------------------
+        # 6. Stopping logic (non-contradictory)
+        # --------------------------------------------------
+        if is_blocked and is_stopped:
+            reward += 0.5  # correct stop
+        elif is_stopped and is_road_clear:
+            reward -= 1.0  # unnecessary stop
+
+        # --------------------------------------------------
+        # 7. Goal
+        # --------------------------------------------------
         if self.lp.done():
-            reward += 500.0
+            reward += 10.0
             terminated = True
+
+        # --------------------------------------------------
+        # 8. Final normalization
+        # --------------------------------------------------
+        reward = np.clip(reward, -5.0, 5.0)
 
         return reward, terminated
 

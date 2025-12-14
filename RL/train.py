@@ -122,8 +122,8 @@ def train(total_timesteps, save_freq, prev_run_id):
 
 
 if __name__ == '__main__':
-    TOTAL_TIMESTEPS = 400_000
-    SAVE_FREQ = 50_000  # Save buffer & model every 100k steps
-    PREVIOUS_RUN_ID = "7gscyuia"  # Set this string (e.g. "a1b2c3d4") to resume a crash
+    TOTAL_TIMESTEPS = 100_000
+    SAVE_FREQ = 25_000  # Save buffer
+    PREVIOUS_RUN_ID = None  # Set this string (e.g. "a1b2c3d4") to resume a crash
 
     train(TOTAL_TIMESTEPS, SAVE_FREQ, PREVIOUS_RUN_ID)

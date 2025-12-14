@@ -32,7 +32,6 @@ def setup() -> carla.Client:
 
     return client
 
-
 def spectator_update(env_instance: 'CarlaEnv', snapshot):
     """Updates the spectator camera to follow the vehicle currently held by the environment."""
 
