@@ -1,0 +1,16 @@
+pyyaml
+scikit-image
+onnx
+onnx-simplifier
+# CHANGED: spconv-cu120 is required for CUDA 12 (RTX 5070 Ti)
+spconv-cu120
+pillow
+# CHANGED: Numba 0.58 is better for Python 3.10
+numba==0.58.0
+opencv-python
+tensorboard
+tqdm
+
+# NVIDIA packages
+--extra-index-url https://pypi.ngc.nvidia.com
+onnx_graphsurgeon
