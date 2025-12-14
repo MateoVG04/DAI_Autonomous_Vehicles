@@ -6,7 +6,7 @@ import cv2
 
 from enum import IntEnum
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Dict
 
 import numpy as np
 import os
@@ -310,11 +310,12 @@ class CarlaWrapper:
         return
 
 class ObjectTrackingML:
-    def __init__(self, model_path='yolov8n.pt'):
+    def __init__(self, model_path='yolov8n.pt', conf_thresholds: Optional[Dict[float]] = None):
         """
         :param model_path: Path to YOLO model (downloads automatically if missing)
         """
         self.model = YOLO(model_path)
+        self.conf_thresholds = conf_thresholds or {}
 
     def process_last_n_frames(self, frames: list):
         """
@@ -328,15 +329,43 @@ class ObjectTrackingML:
             verbose=False  # Keep console clean
         )
 
-        # 3. Annotate the latest frame
+        # 3. Process latest frame
         # We only care about visualizing the last one (the current simulation step)
         latest_result = results[-1]
+
+        self.process_results(latest_result.boxes)
 
         # plot() draws boxes and IDs. It returns BGR, so we convert to RGB for Pygame
         annotated_bgr = latest_result.plot()
         annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
 
         return annotated_rgb
+
+    def process_results(self, boxes):
+        """
+        traffic_light_id = 9
+        traffic_sign_id = 11
+        ^^ Need to check this
+        :return:
+        """
+        for box in boxes:
+            cls_id = int(box.cls[0])  # class index
+            conf = float(box.conf[0])  # confidence score
+
+            if conf < self.conf_thresholds.get(cls_id, 0.5):
+                continue
+
+            if cls_id == 9:
+                self.process_traffic_light(box)
+            if cls_id == 11:
+                self.process_traffic_sign(box)
+
+    def process_traffic_sign(self, box):
+        ... # TODO Traffic light signalling to RL model via Pyro
+
+    def process_traffic_light(self, box):
+        ... # TODO Traffic sign comprehension
+
 
     @staticmethod
     def get_last_n_frames(shared_memory: CarlaWrapper, n=5):

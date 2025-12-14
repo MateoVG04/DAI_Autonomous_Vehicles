@@ -1,5 +1,9 @@
 FROM nvidia/cuda:12.2.2-runtime-ubuntu22.04
 
+# Set environment variables to avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
 # Set a working directory
 WORKDIR /workspace
 
