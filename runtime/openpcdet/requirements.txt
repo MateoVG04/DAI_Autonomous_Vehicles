@@ -1,15 +1,13 @@
 numpy==1.23.0
 llvmlite
 numba
-torch>=1.1
 tensorboardX
 easydict
 pyyaml
 scikit-image
 tqdm
-torchvision
 SharedArray
 opencv-python
-av2
+av2==0.2.0
 kornia<0.7.0 # Needs to be lower than 0.7.0 as higher version will try to JIT compile (and this breaks))
 pyquaternion
