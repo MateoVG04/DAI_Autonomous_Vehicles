@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  object_tracking:
+    user: root # Ja dees is fucked maar "Je KrIjGt EnKeL pUnTeN oP MaChInE lEaRnInG"
+    build:
+      context: ./yolo_container
+      dockerfile: Dockerfile
+    image: yolo_container
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    shm_size: 2gb
+    volumes:
+      # Mount project folder (editable)
+      - ./yolo_container:/workspace
+      # Mount host /dev/shm to container /dev/shm
+      - /dev/shm:/dev/shm
+    working_dir: /workspace
+    command: python3 object_tracking.py
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

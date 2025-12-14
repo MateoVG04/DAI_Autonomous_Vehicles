@@ -1,13 +1,15 @@
+import logging
+import time
+
+from ultralytics import YOLO
+import cv2
+
 from enum import IntEnum
 from pathlib import Path
 from typing import List
 
-import carla
 import numpy as np
 import os
-from PIL import Image
-from matplotlib import pyplot as plt
-
 
 class SharedMemoryArray:
     def __init__(self,
@@ -41,6 +43,7 @@ class SharedMemoryArray:
         """
         return self.slot_size * self.reserved_count
 
+
 class SharedMemoryManager:
     def __init__(self, filename: str,
                  data_arrays: List[SharedMemoryArray],
@@ -65,7 +68,8 @@ class SharedMemoryManager:
         # | write_indices | ... all memory arrays |
         self._mm = np.memmap(filename, dtype=np.uint8, mode="r+", shape=(self.total_size,))
         # Write indices
-        self._write_index_mm = np.ndarray(len(self.data_arrays), dtype=np.uint8, buffer=self._mm[:self.write_array.reserved_size])
+        self._write_index_mm = np.ndarray(len(self.data_arrays), dtype=np.uint8,
+                                          buffer=self._mm[:self.write_array.reserved_size])
 
     @property
     def total_size(self):
@@ -107,6 +111,7 @@ class SharedMemoryManager:
             current_size = os.path.getsize(filepath)
             if self.total_size > current_size:
                 f.write(b"\x00" * (self.total_size - current_size))
+
     # -----
     # write_index operations
     # -----
@@ -118,9 +123,9 @@ class SharedMemoryManager:
         self._mm.flush()
 
     def increment_write_index(self, shared_array_index: int):
-        next_index = self.current_index(shared_array_index)+1
+        next_index = self.current_index(shared_array_index) + 1
         if next_index == self.data_arrays[shared_array_index].reserved_count:
-            next_index = 0 # This makes the write_index circular
+            next_index = 0  # This makes the write_index circular
         self.set_write_index(shared_array_index=shared_array_index, index_value=next_index)
 
     # -----
@@ -151,10 +156,10 @@ class SharedMemoryManager:
         shape = [shared_array.reserved_count, *shared_array.data_shape]
         return np.copy(np.ndarray(
             shape=shape,
-                       dtype=shared_array.datatype,
-                       buffer=self._mm[starting_pos:starting_pos + shared_array.reserved_size].view(
-                           shared_array.datatype)
-                       ))
+            dtype=shared_array.datatype,
+            buffer=self._mm[starting_pos:starting_pos + shared_array.reserved_size].view(
+                shared_array.datatype)
+        ))
 
     def read_data(self, shared_array_index: int, slot_index: int):
         shared_array = self.data_arrays[shared_array_index]
@@ -173,15 +178,15 @@ class CarlaWrapper:
 
     def __init__(self, filename, image_width: int, image_height: int, max_lidar_points: int):
         data_arrays = [
-            SharedMemoryArray(data_shape=[image_height, image_width, 3], # Raw images
+            SharedMemoryArray(data_shape=[image_height, image_width, 3],  # Raw images
                               reserved_count=100,
                               datatype=np.uint8),
-            SharedMemoryArray(data_shape=[image_height, image_width, 3], # Object Detected images
+            SharedMemoryArray(data_shape=[image_height, image_width, 3],  # Object Detected images
                               reserved_count=100,
                               datatype=np.uint8),
-            SharedMemoryArray(data_shape=[33], # 33 for now
-                                reserved_count=100,
-                                datatype=np.float64),
+            SharedMemoryArray(data_shape=[33],  # 33 for now
+                              reserved_count=100,
+                              datatype=np.float64),
             SharedMemoryArray(data_shape=[max_lidar_points, 4],  # LiDAR points x, y, z, intensity
                               reserved_count=100,
                               datatype=np.float32),
@@ -220,7 +225,7 @@ class CarlaWrapper:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)
 
     def read_latest_image(self) -> np.ndarray:
-        slot_index = self.latest_image_index -1
+        slot_index = self.latest_image_index - 1
         if slot_index == -1:
             slot_index = self.shared_memory.data_arrays[self.CarlaDataType.images.value].reserved_count - 1
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=slot_index)
@@ -231,10 +236,11 @@ class CarlaWrapper:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.object_detected.value)
 
     def read_latest_object_detected(self) -> np.ndarray:
-        slot_index = self.latest_image_index -1
+        slot_index = self.latest_image_index - 1
         if slot_index == -1:
             slot_index = self.shared_memory.data_arrays[self.CarlaDataType.object_detected.value].reserved_count - 1
-        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_detected.value, slot_index=slot_index)
+        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_detected.value,
+                                            slot_index=slot_index)
 
     def write_object_detected(self, image: np.ndarray):
         array = np.frombuffer(image, dtype=np.uint8)
@@ -284,20 +290,115 @@ class CarlaWrapper:
             slot_index=slot_index
         )
         return points
-    
+
     # ----- Object Tracking
     @property
     def latest_object_tracking_index(self) -> int:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.object_tracking.value)
 
     def read_latest_object_tracking(self) -> np.ndarray:
-        slot_index = self.latest_object_tracking_index -1
+        slot_index = self.latest_object_tracking_index - 1
         if slot_index == -1:
             slot_index = self.shared_memory.data_arrays[self.CarlaDataType.object_tracking.value].reserved_count - 1
-        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_tracking.value, slot_index=slot_index)
+        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_tracking.value,
+                                            slot_index=slot_index)
 
     def write_object_tracking(self, image: np.ndarray):
         array = np.frombuffer(image, dtype=np.uint8)
         array = np.ascontiguousarray(array)
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.object_tracking.value, input_data=array)
         return
+
+class ObjectTrackingML:
+    def __init__(self, model_path='yolov8n.pt'):
+        """
+        :param model_path: Path to YOLO model (downloads automatically if missing)
+        """
+        self.model = YOLO(model_path)
+
+    def process_last_n_frames(self, frames: list):
+        """
+        returns the annotated image of the latest frame.
+        """
+        # persist=True tells YOLO to remember object IDs from the previous call
+        results = self.model.track(
+            source=frames,
+            persist=True,
+            tracker="bytetrack.yaml",
+            verbose=False  # Keep console clean
+        )
+
+        # 3. Annotate the latest frame
+        # We only care about visualizing the last one (the current simulation step)
+        latest_result = results[-1]
+
+        # plot() draws boxes and IDs. It returns BGR, so we convert to RGB for Pygame
+        annotated_bgr = latest_result.plot()
+        annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+
+        return annotated_rgb
+
+    @staticmethod
+    def get_last_n_frames(shared_memory: CarlaWrapper, n=5):
+        """
+        Circular buffer logic
+        :param shared_memory:
+        :return:
+        """
+        write_head = shared_memory.latest_image_index
+        total_slots = shared_memory.shared_memory.data_arrays[0].reserved_count
+
+        indices = []
+        # We want frames ordered from Oldest -> Newest
+        # Logic: If head is at 10 and n=5, we want indices: 5, 6, 7, 8, 9
+        for i in range(n, 0, -1):
+            # (write_head - i) handles the offset
+            # % total_slots handles the wrap-around (Python's % operator handles negatives correctly)
+            idx = (write_head - i) % total_slots
+            indices.append(idx)
+
+        # Read frame from shared memory
+        # Note: frame is RGB (H, W, 3) because that's how we saved it
+        frames = [shared_memory.read_image(idx) for idx in indices]
+        return frames
+
+if __name__ == "__main__":
+    """
+    Very small testing script at the start to see if the imports and setup work
+    """
+    logger = logging.getLogger(__name__)
+    object_tracking = ObjectTrackingML()
+    logger.info("ObjectTracking class instantiated")
+
+    frame1 = cv2.imread("frame1.jpeg")
+    frame2 = cv2.imread("frame2.jpeg")
+    # Convert BGR to RGB for plotting
+    frame1_rgb = cv2.cvtColor(frame1, cv2.COLOR_BGR2RGB)
+    frame2_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
+
+    result = object_tracking.process_last_n_frames([frame1_rgb, frame2_rgb])
+    logger.info("Test batch ran")
+
+    """
+    Then a continuous loop checking the shared memory buffer
+    """
+    camera_width = 800
+    camera_height = 600
+    max_lidar_points = 120000
+    shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+    shared_memory = CarlaWrapper(filename=shared_memory_filepath,
+                                 image_width=camera_width,
+                                 image_height=camera_height,
+                                 max_lidar_points=max_lidar_points)
+    logger.info("Shared memory setup")
+
+    # state_proxy = Pyro4.Proxy("PyroServer:state_task_list@localhost:9090")
+    logger.info("Connected to Pyro server")
+
+    logger.info("Starting loop")
+    while True:
+        n_frames = ObjectTrackingML.get_last_n_frames(shared_memory=shared_memory)
+        frame = object_tracking.process_last_n_frames(frames=n_frames)
+        shared_memory.write_object_tracking(frame)
+        logger.info("Did loop")
+

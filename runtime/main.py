@@ -1,7 +1,10 @@
 import logging
 import random
 import sys
+import threading
+import time
 
+import Pyro4
 from opentelemetry import trace, metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
@@ -40,8 +43,11 @@ class MinimalHUD:
 
         self.shared_memory: CarlaWrapper = shared_memory
 
+        self.quad_w = width // 2
+        self.quad_h = height // 2
+
         # Persistent LiDAR surface for incremental rendering
-        self.lidar_surface = pygame.Surface((self.dim[0] // 2, self.dim[1]))
+        self.lidar_surface = pygame.Surface((self.quad_w, self.quad_h))
         self.lidar_surface.fill((0, 0, 0))  # start black
         self.lidar_surface.set_alpha(255)
 
@@ -62,7 +68,15 @@ class MinimalHUD:
         lidar_points = self.shared_memory.read_latest_lidar_points()
         if lidar_points is not None:
             self._draw_lidar_incremental(lidar_points)
-        display.blit(self.lidar_surface, (self.dim[0] // 2, 0))
+        display.blit(self.lidar_surface, (self.quad_w, 0))
+
+        # 3. Bottom-Left: Object Detection (Processed Image)
+        obj_frame = self.shared_memory.read_latest_object_tracking()
+        if obj_frame is None:
+            print(obj_frame)
+        if obj_frame.size > 0:
+            obj_surf = pygame.surfarray.make_surface(obj_frame.transpose(1, 0, 2))
+            display.blit(obj_surf, (0, self.quad_h))
 
         # HUD
         vel = vehicle.get_velocity()
@@ -79,11 +93,13 @@ class MinimalHUD:
         hud_surface.fill((0, 0, 0))
         display.blit(hud_surface, (10, 10))
 
-        y = 16
+        # Draw info box in Bottom-Right
+        info_x = 20
+        info_y = 20
         for line in lines:
             text = self.font.render(line, True, (255, 255, 255))
-            display.blit(text, (20, y))
-            y += 20
+            display.blit(text, (info_x, info_y))
+            info_y += 20
 
     def _draw_lidar_incremental(self, points, max_range=50.0):
         """
@@ -325,6 +341,32 @@ def record_agent_state(world, vehicle, agent, logger, distance_hist, speed_hist)
 
     # logger.info(f"Current location: {loc}, Distance to dest: {dist:.2f}m, Speed: {speed:.2f} km/h")
 
+
+# ==============================================================================
+# -- Remote Objects --------------------------------------------------------------
+# ==============================================================================
+@Pyro4.expose
+class StateTaskList:
+    def __init__(self, size):
+        self.size = size
+        self._flags = [False] * size
+        self.lock = threading.Lock()
+
+    def reset(self):
+        self._flags = [False] * self.size
+
+    def at(self, index: int):
+        with self.lock:
+            return self._flags[index]
+
+    def set(self, index: int, value: bool):
+        with self.lock:
+            self._flags[index] = value
+
+    def flags(self):
+        with self.lock:
+            return list(self._flags)
+
 # ==============================================================================
 # -- Agent() --------------------------------------------------------------
 # ==============================================================================
@@ -372,7 +414,7 @@ def main():
     # -----
     # Setting up
     # -----
-    setup_telemetry(address=telemetry_address, port=telemetry_port)
+    setup_telemetry(address=telemetry_address, port=telemetry_port, send_to_otlp=False, log_to_console=True)
     tracer = trace.get_tracer(__name__)
     logger = logging.getLogger(__name__)
     meter = metrics.get_meter(__name__)
@@ -384,20 +426,25 @@ def main():
     logger.info("Carla Client started setup finished")
 
     # shared mem
-    shared_memory_filepath = "/dev/shm/carla_shared_v3.dat"
+    shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
     shared_memory = CarlaWrapper(filename=shared_memory_filepath,
                                  image_width=camera_width,
                                  image_height=camera_height,
                                  max_lidar_points=max_lidar_points)
 
-    # Pyro
-    # TODO
+    # Pyro TODO
+    # pyro_port = 9090  # choose any free port
+    # daemon = Pyro4.Daemon(host="0.0.0.0", port=pyro_port)
+    # daemon.register(StateTaskList(1))
+    # logger.info(f"Pyro Daemon started on port {pyro_port}")
+    # state_task_list = Pyro4.Proxy("PyroServer:state_task_list@localhost:9090")
+    # daemon.requestLoop()
 
     # Pygame
     pygame.init()
     pygame.font.init()
     hud_width = camera_width * 2  # double width for camera + LiDAR
-    hud_height = camera_height
+    hud_height = camera_height * 2
     display = pygame.display.set_mode(
         (hud_width, hud_height),
         pygame.HWSURFACE | pygame.DOUBLEBUF
@@ -440,6 +487,7 @@ def main():
     logger.info(f"Setup finished for vehicle at {vehicle.get_location()}")
 
     # 4) Simulation
+    simstep = 0
     end_simulation = False
 
     logger.info("Starting simulation")
@@ -451,6 +499,7 @@ def main():
                 drive_span.set_attribute("destination.distance", 0) # fixme
                 drive_span.set_attribute("loop.count_start", loop_count)
                 while not agent.done():
+                    simstep += 1
                     with tracer.start_as_current_span("control_loop") as loop_span:
                         # 1) Pygame events (non-blocking)
                         if MinimalHUD.handle_pygame_events():
@@ -478,16 +527,16 @@ def main():
                                 speed_hist=speed_hist,
                             )
 
-                        # 5) Agent control
+                        # 5) TODO State negotiating
+                        # while not all(state_task_list.flags()):
+                        #     logger.info("Waitning ..")
+                        #     time.sleep(0.1)
+                        # state_task_list.reset()
+
+                        # 6) Agent control
                         control = agent.run_step()
                         control.manual_gear_shift = False
                         vehicle.apply_control(control)
-
-                        # 6) Render camera frame
-                        frame = shared_memory.read_latest_image()
-                        if frame is not None:
-                            surface = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
-                            display.blit(surface, (0, 0))
 
                         # 7) HUD overlay
                         hud.tick()
