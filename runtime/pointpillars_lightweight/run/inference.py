@@ -1,12 +1,14 @@
 import logging
 import sys
+from collections import deque
 
 from tensorboard.compat.tensorflow_stub.errors import InvalidArgumentError
 from torch import Tensor
 
 from enum import IntEnum
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Deque
+import Pyro4
 
 import numpy as np
 import os
@@ -310,6 +312,37 @@ class CarlaWrapper:
         self.shared_memory.write_data(shared_array_index=self.CarlaDataType.object_tracking.value, input_data=array)
         return
 
+
+# ==============================================================================
+# -- Point Accumulator ---------------------------------------------------------
+# ==============================================================================
+class PointAccumulator:
+    """
+    Accumulates LiDAR packets to create a dense point cloud similar to KITTI.
+    """
+
+    def __init__(self, target_points=60000, max_buffers=10):
+        self.buffer: Deque[np.ndarray] = deque(maxlen=max_buffers)
+        self.target_points = target_points
+
+    def add_points(self, points: np.ndarray):
+        # Filter out padding (0,0,0)
+        mask = np.any(points[:, :3] != 0, axis=1)
+        valid_points = points[mask]
+
+        if len(valid_points) > 0:
+            self.buffer.append(valid_points)
+
+    def get_sweep(self) -> np.ndarray:
+        # Stack all buffered frames
+        return np.concatenate(list(self.buffer), axis=0)
+
+    def is_ready(self) -> bool:
+        # Check if we have enough density
+        if not self.buffer: return False
+        total = sum(len(b) for b in self.buffer)
+        return total >= self.target_points
+
 # Add the repo to python path so we can import its modules
 sys.path.append("/workspace/PointPillars")
 
@@ -421,13 +454,6 @@ if __name__ == "__main__":
     ml_engine = PointPillarsML(ckpt_path="/workspace/PointPillars/pretrained/epoch_160.pth") # This could be env variable
     logger.info(f"${ml_engine.__class__} class instantiated")
 
-    test_input = ...
-    test_result = ...
-    logger.info("Test batch ran")
-
-    """
-    Then a continuous loop checking the shared memory buffer
-    """
     camera_width = 800
     camera_height = 600
     max_lidar_points = 120000
@@ -438,27 +464,65 @@ if __name__ == "__main__":
                                  max_lidar_points=max_lidar_points)
     logger.info("Shared memory setup")
 
+    # Pyro server
+    PYRO_URI = "PYRO:pyrostateserver@localhost:9090"
+    remote_monitor = Pyro4.Proxy(PYRO_URI)
+    logger.info(f"Connected to Pyro Server at {PYRO_URI}")
+
+    # Data loader
+    accumulator = PointAccumulator(target_points=40000, max_buffers=3)
 
     logger.info("Starting loop")
-    # while True:
-    point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
+    while True:
+        point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
+        accumulator.add_points(point_cloud)
 
-    # fixme -> comment what preprocessing does
-    tensor_input = ml_engine.preprocess(point_cloud)
+        # Check if we have enough density
+        if not accumulator.is_ready():
+            continue
 
-    # todo do batching instead of only one frame (like 5->10 maybe?)
-    result = ml_engine.predict([tensor_input])
+        dense_cloud = accumulator.get_sweep()
+        tensor_input = ml_engine.preprocess(dense_cloud)
+        if tensor_input is None:
+            logger.info("No valid LiDAR points after preprocessing. Skipping frame.")
+            continue
 
-    # fixme return object handling -> might not be required to do the instance check but idk how the library works
-    if isinstance(result, list):
-        if len(result) == 0:
-            ...
-        result = result[0]
+        # todo do batching instead of only one frame (like 5->10 maybe?)
+        result = ml_engine.predict([tensor_input])
 
-    if result:
-        bboxes = result['lidar_bboxes']  # [x, y, z, w, l, h, rot]
-        labels = result['labels']  # [0, 1, 2] -> Car, Ped, Cyc
-        scores = result['scores']  # 0.0 to 1.0
-        logger.info(f"Found ${len(bboxes)} bboxes with these labels and scores: ${list(zip(labels, scores))}")
-    else:
-        logger.info("No bboxes found")
+        # fixme return object handling -> might not be required to do the instance check but idk how the library works
+        if result:
+            # When doing the batching we get multiple returns, we want the most recent one
+            if isinstance(result, list):
+                result = result[-1]
+
+            #
+            if isinstance(result, dict):
+                bboxes = result['lidar_bboxes']  # [x, y, z, w, l, h, rot]
+                labels = result['labels']  # [0, 1, 2] -> Car, Ped, Cyc
+                scores = result['scores']  # 0.0 to 1.0
+                raw_detects = len(bboxes)
+
+                mask = scores > 0.45
+                bboxes = bboxes[mask].tolist()
+                labels = labels[mask].tolist()
+                scores = scores[mask].tolist()
+            else:
+                bboxes = None
+                labels = None
+                scores = None
+                raw_detects = None
+
+            try:
+                remote_monitor.update_lidar_result(
+                    bboxes,
+                    labels,
+                    scores,
+                    raw_detects
+                )
+            except Exception as e:
+                logger.warning(e)
+
+            logger.info(f"Found ${len(bboxes or [])} bboxes")
+        else:
+            logger.info("No bboxes found")

@@ -9,3 +9,5 @@ tqdm
 # NVIDIA packages
 --extra-index-url https://pypi.ngc.nvidia.com
 numba-cuda
+
+Pyro4>=4.82
