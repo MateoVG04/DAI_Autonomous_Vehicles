@@ -102,7 +102,7 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = None
         self._init_world_settings()
         self._init_traffic_manager()
-        self._load_map("Town01_Opt") # Start on first map
+        self._load_map("Town04_Opt") # Start on first map
 
         logger.info("Carla environment initialized")
 
@@ -484,59 +484,95 @@ class CarlaEnv(gym.Env):
         :param waypoints: The next waypoints from the Local Planner
         :return: Tuple of (reward: float, terminated: bool)
         """
-
         reward = 0.0
         terminated = False
 
-        # --------------------------------------------------
-        # 1. Collision
-        # --------------------------------------------------
+        # -----------------------------------------------------------
+        # 1. SAFETY: Immediate Collision Termination
+        # -----------------------------------------------------------
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
+            # Massive penalty to ensure collisions are the "worst case"
             return -100.0, True
 
-        # --------------------------------------------------
-        # 2. Speed & traffic context
-        # --------------------------------------------------
-        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
-        speed_limit = self.ego_vehicle.get_speed_limit() / 3.6
+        # -----------------------------------------------------------
+        # 2. INPUTS: Gather Data
+        # -----------------------------------------------------------
+        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
 
-        safe_dist = max(5.0, speed * 2.0)
+        # Speed Limit (Dynamic)
+        speed_limit = self.ego_vehicle.get_speed_limit() / 3.6
+        speed_limit = max(5.0, speed_limit)  # Floor at 5 m/s
+
+        # Distance Logic
+        # Safety Bubble: We want a 2-second gap, but never less than 6 meters.
+        safe_dist = max(6.0, speed * 2.0)
         dist_to_lead = self.distance_ahead
 
+        # Mode Selection
+        # We are "Blocked" if a car is inside our safety bubble
         is_blocked = dist_to_lead < safe_dist
-        is_stopped = speed < 1.0
-        is_road_clear = dist_to_lead > 30.0
 
-        # --------------------------------------------------
-        # 3. Target speed logic (single source of truth)
-        # --------------------------------------------------
+        # -----------------------------------------------------------
+        # 3. DUAL-MODE TARGET SPEED
+        # -----------------------------------------------------------
         if is_blocked:
+            # MODE A: TRAFFIC / STOPPING
+            # If the lead car is stopped, we want to stop (Target = 0).
+            # If lead car is moving, we roughly match their speed (approximated by 0 for safety).
             target_speed = 0.0
+
+            # --- CRITICAL: The "Stop Safely" Reward ---
+            # If we are blocked, we reward the agent for being slow/stopped.
+            # This makes the agent "happy" to wait behind a car.
+
+            # Additional penalty if we get CRITICALLY close (< 4m) to prevent bumper-touching
+            if dist_to_lead < 5.0:
+                reward -= 10.0 * (5.0 - dist_to_lead)  # Push back hard
+
         else:
+            # MODE B: CLEAR ROAD
             target_speed = speed_limit
 
-        # Smooth bounded speed reward
-        speed_error = speed - target_speed
-        r_speed = np.exp(-0.25 * speed_error ** 2)  # ∈ (0, 1]
+            # --- CRITICAL: The "Go Fast" Penalty ---
+            # If the road is clear, we punish SLOW driving.
+            # If speed is less than 80% of limit, apply penalty.
+            if speed < (speed_limit * 0.8):
+                reward -= 3.0
+
+        # -----------------------------------------------------------
+        # 4. UNIVERSAL SPEED REWARD (Gaussian)
+        # -----------------------------------------------------------
+        # This works for both modes:
+        # - In Mode A, it rewards slowing down to 0.
+        # - In Mode B, it rewards speeding up to Limit.
+        speed_diff = abs(speed - target_speed)
+        r_speed = np.exp(-0.25 * speed_diff ** 2)
         reward += r_speed
 
-        if speed > 1.0:
-            reward += 0.75
+        # -----------------------------------------------------------
+        # 5. PROGRESS BIAS (Only when clear)
+        # -----------------------------------------------------------
+        # We only give the "forward motion" bonus if we are NOT blocked.
+        # This prevents the "Traffic Jam Lover" bug where the agent wants to
+        # creep forward into a stopped car.
+        if not is_blocked:
+            if speed > 5.0:
+                reward += 0.5
+            else:
+                reward -= 2.0
 
-        # --------------------------------------------------
-        # 4. Lane centering (only if planner valid)
-        # --------------------------------------------------
+
+        # -----------------------------------------------------------
+        # 6. STANDARD SHAPING (Lane & Comfort)
+        # -----------------------------------------------------------
+        # Lane Centering
         if waypoints:
-            dist_center = waypoints[0].transform.location.distance(
-                self.ego_vehicle.get_location()
-            )
-            reward -= 0.2 * dist_center
+            dist_center = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
+            reward -= 0.5 * dist_center  # Keep strict
         else:
-            reward -= 1.0  # planner failure
+            reward -= 1.0
 
-        # --------------------------------------------------
-        # 5. Comfort (G-forces)
-        # --------------------------------------------------
+        # Comfort: Penalize high G-forces
         accel = self.ego_vehicle.get_acceleration()
         tf = self.ego_vehicle.get_transform()
 
@@ -547,26 +583,19 @@ class CarlaEnv(gym.Env):
         reward -= 0.5 * max(0.0, long_g - 0.5)
 
         # --------------------------------------------------
-        # 6. Stopping logic
-        # --------------------------------------------------
-        if is_blocked and is_stopped:
-            reward += 0.5  # correct stop
-        elif is_stopped and is_road_clear:
-            reward -= 2.0  # unnecessary stop
-
-        # --------------------------------------------------
-        # 7. Goal
-        # --------------------------------------------------
-        if self.lp.done():
-            reward += 10.0
-            terminated = True
-
-        # --------------------------------------------------
         # 8. Final normalization
         # --------------------------------------------------
         reward = np.clip(reward, -5.0, 5.0)
 
+        # -----------------------------------------------------------
+        # 7. GOAL & TERMINATION
+        # -----------------------------------------------------------
+        if self.lp.done():
+            reward += 50.0
+            terminated = True
+
         return reward, terminated
+
 
     def _cleanup(self):
         """Destroys current actors cleanly."""
@@ -605,41 +634,40 @@ class CarlaEnv(gym.Env):
         """
         self._cleanup()
 
+    # Debugging purposes: Render HUD
     def _render_hud(self, reward: float):
+        # 1. Get Real Control Values (What the car is actually doing)
         ctrl = self.ego_vehicle.get_control()
         speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
         accel = self.ego_vehicle.get_acceleration()
-
-        tf = self.ego_vehicle.get_transform()
-        loc = tf.location
-        right = tf.get_right_vector()
-        up = carla.Vector3D(0, 0, 1)
+        # 2. Get Car Location to place text
+        loc = self.ego_vehicle.get_location()
 
         gforce = np.sqrt(accel.x ** 2 + accel.y ** 2) / 9.81
 
+        # 3. Define the text lines (Bottom to Top)
         info_text = [
             f"Speed: {speed * 3.6:.1f} km/h",
-            f"Speed limit: {self.ego_vehicle.get_speed_limit():.1f} km/h",
+            f"speed_limit: {self.ego_vehicle.get_speed_limit():.1f} km/h",
             f"Steer: {ctrl.steer:.2f}",
             f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
             f"GForce: {gforce:.2f} g",
-            f"DistAhead: {self.distance_ahead:.2f} m",
+            f"distAhead: {self.distance_ahead:.2f} m",
             f"Reward: {reward:.2f}",
-            f"Episode step: {self.episode_step}",
+            f"Episode: {self.episode_step}"
         ]
 
-        base = loc + up * 2.5 + right * 1.5  # anchor point
-
+        # 4. Draw the strings in the world
+        # We stack them vertically by increasing Z
         for i, line in enumerate(info_text):
-            pos = base + up * (0.35 * i)
             self.world.debug.draw_string(
-                pos,
+                # Position: 2 meters above car, slightly offset per line
+                carla.Location(x=loc.x, y=loc.y, z=loc.z + 2.0 + (i * 0.5)),
                 line,
                 draw_shadow=True,
-                color=carla.Color(255, 255, 255),
-                life_time=0.05
+                color=carla.Color(255, 255, 255),  # White text
+                life_time=0.05  # Update every frame (assuming 20fps)
             )
-
     def get_latest_image(self):
         if self.latest_rgb is None:
             # nothing received yet
