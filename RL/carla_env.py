@@ -16,9 +16,9 @@ stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(leveln
 logger.addHandler(stream_handler)
 
 # Constants
-MAX_STEPS = 2000
-WAIT_TICKS = 50
-SPAWN_VEHICLES = 25
+MAX_STEPS = 1500
+WAIT_TICKS = 30
+SPAWN_VEHICLES = 30
 MAP_CHANGE_FREQ = 25
 
 @Pyro4.expose
@@ -213,6 +213,11 @@ class CarlaEnv(gym.Env):
     def _spawn_traffic(self, n_vehicles):
         """
         Spawns vehicles in the simulation.
+        - Filters vehicle blueprints to exclude bikes and motorcycles.
+        - Spawns vehicles at random spawn points away from the ego vehicle.
+        - Enables autopilot for spawned vehicles via Traffic Manager.
+        - Uses batch commands for efficient spawning.
+
         :param n_vehicles: Number of cars to spawn.
         """
 
@@ -257,7 +262,15 @@ class CarlaEnv(gym.Env):
 
 
     def _get_gt_distance(self, range_limit=50.0):
-        """ Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data """
+        """
+        Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
+        - Uses vector math to determine relative positions.
+        - Considers only vehicles in front and within lane boundaries.
+        - Optimized with a quick Euclidean distance check to skip far vehicles.
+        - Returns the closest distance found, or the range limit if none found.
+
+        :param range_limit: Maximum range to consider (meters)
+        """
         if not self.ego_vehicle:
             return range_limit
 
@@ -322,9 +335,11 @@ class CarlaEnv(gym.Env):
     def reset(self, seed=None, options=None) -> tuple:
         """
         Resets the environment for a new episode.
-        - Increments episode count and switches map if needed.
-        - Spawns the vehicle at a random spawn point and sets destination.
-        - Calculates the route using the Global Route Planner and resets the Local Planner with the new route.
+        - Switches map every N episodes.
+        - Respawns or resets the ego vehicle.
+        - Settles physics by applying brakes for a few ticks.
+        - Generates a new random route using the Global Route Planner.
+        - Clears collision history and resets episode step counter.
         - Returns the initial observation.
 
         :param seed: Random seed for reproducibility (not used)
@@ -460,11 +475,12 @@ class CarlaEnv(gym.Env):
         """
         Computes the reward for the current state.
         - Penalizes collisions heavily.
-        - Encourages going the speed limit and staying in lane.
-        - Encourages safe following distance.
+        - Encourages going the speed limit unless in traffic.
+        - Encourages staying in the lane.
         - Encourages smooth driving (low G-forces).
-        - Penalizes stopping and going off-road.
-        - Rewards reaching the goal greatly.
+        - Penalize stopping unless in traffic.
+        - Rewards reaching the goal.
+        -> finally normalize reward
         :param waypoints: The next waypoints from the Local Planner
         :return: Tuple of (reward: float, terminated: bool)
         """
@@ -476,7 +492,7 @@ class CarlaEnv(gym.Env):
         # 1. Collision
         # --------------------------------------------------
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
-            return -10.0, True
+            return -100.0, True
 
         # --------------------------------------------------
         # 2. Speed & traffic context
@@ -501,8 +517,11 @@ class CarlaEnv(gym.Env):
 
         # Smooth bounded speed reward
         speed_error = speed - target_speed
-        r_speed = np.exp(-0.5 * speed_error ** 2)  # ∈ (0, 1]
+        r_speed = np.exp(-0.25 * speed_error ** 2)  # ∈ (0, 1]
         reward += r_speed
+
+        if speed > 1.0:
+            reward += 0.75
 
         # --------------------------------------------------
         # 4. Lane centering (only if planner valid)
@@ -528,12 +547,12 @@ class CarlaEnv(gym.Env):
         reward -= 0.5 * max(0.0, long_g - 0.5)
 
         # --------------------------------------------------
-        # 6. Stopping logic (non-contradictory)
+        # 6. Stopping logic
         # --------------------------------------------------
         if is_blocked and is_stopped:
             reward += 0.5  # correct stop
         elif is_stopped and is_road_clear:
-            reward -= 1.0  # unnecessary stop
+            reward -= 2.0  # unnecessary stop
 
         # --------------------------------------------------
         # 7. Goal
