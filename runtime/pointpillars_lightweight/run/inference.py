@@ -7,6 +7,7 @@ from torch import Tensor
 from enum import IntEnum
 from pathlib import Path
 from typing import List, Optional
+import Pyro4
 
 import numpy as np
 import os
@@ -421,13 +422,6 @@ if __name__ == "__main__":
     ml_engine = PointPillarsML(ckpt_path="/workspace/PointPillars/pretrained/epoch_160.pth") # This could be env variable
     logger.info(f"${ml_engine.__class__} class instantiated")
 
-    test_input = ...
-    test_result = ...
-    logger.info("Test batch ran")
-
-    """
-    Then a continuous loop checking the shared memory buffer
-    """
     camera_width = 800
     camera_height = 600
     max_lidar_points = 120000
@@ -438,27 +432,46 @@ if __name__ == "__main__":
                                  max_lidar_points=max_lidar_points)
     logger.info("Shared memory setup")
 
+    # Pyro server
+    PYRO_URI = "PYRO:pyrostateserver@localhost:9090"
+    remote_monitor = Pyro4.Proxy(PYRO_URI)
+    logger.info(f"Connected to Pyro Server at {PYRO_URI}")
 
     logger.info("Starting loop")
-    # while True:
-    point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
+    while True:
+        point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
 
-    # fixme -> comment what preprocessing does
-    tensor_input = ml_engine.preprocess(point_cloud)
+        # fixme -> comment what preprocessing does
+        tensor_input = ml_engine.preprocess(point_cloud)
 
-    # todo do batching instead of only one frame (like 5->10 maybe?)
-    result = ml_engine.predict([tensor_input])
+        # todo do batching instead of only one frame (like 5->10 maybe?)
+        result = ml_engine.predict([tensor_input])
 
-    # fixme return object handling -> might not be required to do the instance check but idk how the library works
-    if isinstance(result, list):
-        if len(result) == 0:
-            ...
-        result = result[0]
+        # fixme return object handling -> might not be required to do the instance check but idk how the library works
+        if result:
+            # When doing the batching we get multiple returns, we want the most recent one
+            if isinstance(result, list):
+                result = result[-1]
 
-    if result:
-        bboxes = result['lidar_bboxes']  # [x, y, z, w, l, h, rot]
-        labels = result['labels']  # [0, 1, 2] -> Car, Ped, Cyc
-        scores = result['scores']  # 0.0 to 1.0
-        logger.info(f"Found ${len(bboxes)} bboxes with these labels and scores: ${list(zip(labels, scores))}")
-    else:
-        logger.info("No bboxes found")
+            #
+            if isinstance(result, dict):
+                bboxes = result['lidar_bboxes'].tolist()  # [x, y, z, w, l, h, rot]
+                labels = result['labels'].tolist()  # [0, 1, 2] -> Car, Ped, Cyc
+                scores = result['scores'].tolist()  # 0.0 to 1.0
+            else:
+                bboxes = None
+                labels = None
+                scores = None
+
+            try:
+                remote_monitor.update_lidar_result(
+                    bboxes,
+                    labels,
+                    scores
+                )
+            except Exception as e:
+                logger.warning(e)
+
+            logger.info(f"Found ${len(bboxes or [])} bboxes")
+        else:
+            logger.info("No bboxes found")

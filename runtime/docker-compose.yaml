@@ -86,7 +86,7 @@ services:
       context: ./pointpillars_lightweight
       dockerfile: Dockerfile
     image: pointpillars_light
-
+    network_mode: host  # So it can connect with VM process on localhost
     working_dir: /workspace
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
