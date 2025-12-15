@@ -613,18 +613,13 @@ def main():
                                 speed_hist=speed_hist,
                             )
 
-                        # 5) TODO State negotiating
-                        # while not all(state_task_list.flags()):
-                        #     logger.info("Waitning ..")
-                        #     time.sleep(0.1)
-                        # state_task_list.reset()
-
-                        # 6) Agent control
+                        # 5) Agent control
+                        # TODO @mateo RL hier
                         control = agent.run_step()
                         control.manual_gear_shift = False
                         vehicle.apply_control(control)
 
-                        # 7) HUD overlay
+                        # 6) HUD overlay
                         hud.tick()
                         hud.render(display, vehicle, dist)
 
