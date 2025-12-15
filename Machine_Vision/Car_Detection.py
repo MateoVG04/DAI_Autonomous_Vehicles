@@ -78,7 +78,7 @@ def process_once():
     #     plt.pause(0.001)
         # plt.close()  # sluit desgewenst automatisch
 
-    print("✅ Detectie uitgevoerd, geannoteerd beeld wegschreven en geverifieerd.")
+    print("Detectie uitgevoerd, geannoteerd beeld wegschreven en geverifieerd.")
 
 if __name__ == "__main__":
     while True:

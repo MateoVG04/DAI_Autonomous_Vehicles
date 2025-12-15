@@ -25,32 +25,32 @@ services:
               count: all
               capabilities: [gpu]
 
-  openpcdet:
-    build:
-      context: ./openpcdet
-      dockerfile: Dockerfile
-    image: openpcdet_image
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_LAUNCH_BLOCKING=1
-      - PYTHONUNBUFFERED=1
-    working_dir: /workspace
-    volumes:
-      # Your local inference script
-      - ./openpcdet/run:/workspace/run
-      - ./openpcdet/checkpoints:/workspace/checkpoints
-      # Mount host /dev/shm to container /dev/shm
-      - /dev/shm:/dev/shm
-    command: python3 inference.py
-    stdin_open: true
-    tty: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+#  openpcdet:
+#    build:
+#      context: ./openpcdet
+#      dockerfile: Dockerfile
+#    image: openpcdet_image
+#    environment:
+#      - NVIDIA_VISIBLE_DEVICES=all
+#      - CUDA_LAUNCH_BLOCKING=1
+#      - PYTHONUNBUFFERED=1
+#    working_dir: /workspace
+#    volumes:
+#      # Your local inference script
+#      - ./openpcdet/run:/workspace/run
+#      - ./openpcdet/checkpoints:/workspace/checkpoints
+#      # Mount host /dev/shm to container /dev/shm
+#      - /dev/shm:/dev/shm
+#    command: python3 inference.py
+#    stdin_open: true
+#    tty: true
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: all
+#              capabilities: [gpu]
 
 # I found online that OpenPCDet is better for Lidar so trying that first
 #  mmdet3d:
