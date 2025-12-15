@@ -73,6 +73,7 @@ class LiDARManager:
         channels: int = 32,
         points_per_second: int = 56000,
         rotation_frequency: float = 10.0,
+        z_offset: float = 1.73
     ):
         self._parent = parent_actor
         self.shared_memory = shared_memory
@@ -90,7 +91,7 @@ class LiDARManager:
         lidar_bp.set_attribute('rotation_frequency', str(rotation_frequency))
 
         lidar_transform = carla.Transform(
-            carla.Location(x=0.0, z=2.5)
+            carla.Location(x=0.0, z=z_offset)
         )
 
         self.sensor = world.spawn_actor(

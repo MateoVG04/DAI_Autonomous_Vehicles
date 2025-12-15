@@ -559,9 +559,10 @@ def main():
                          parent_actor=vehicle,
                          shared_memory=shared_memory,
                          range_m=50.0,
-                         channels=32,
-                         points_per_second=80000,
-                         rotation_frequency=10.0
+                         channels=64,
+                         points_per_second=1300000,
+                         rotation_frequency=10.0,
+                         z_offset=1.73
                          )
 
     hud = MinimalHUD(hud_width, hud_height, shared_memory=shared_memory, pyro_state_server=pyro_state_server)
