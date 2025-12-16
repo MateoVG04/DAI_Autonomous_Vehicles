@@ -56,11 +56,12 @@ class MinimalHUD:
         if bboxes and len(bboxes) > 0:
             self._draw_bboxes_overlay(display, bboxes, offset=(self.quad_w, 0))
 
-        # 4. ----- Object Detection Debug View (Bottom-Left)
-        obj_frame = self.shared_memory.read_latest_object_tracking()
-        if obj_frame is not None and obj_frame.size > 0:
-            obj_surf = pygame.surfarray.make_surface(obj_frame.transpose(1, 0, 2))
-            display.blit(obj_surf, (0, self.quad_h))
+        # 4. ----- Chase camera (Bottom-Left)
+        chase_frame = self.shared_memory.read_latest_chase_image()
+        if chase_frame is not None:
+            chase_rgb = cv2.cvtColor(chase_frame, cv2.COLOR_BGR2RGB)
+            chase_surf = pygame.surfarray.make_surface(chase_rgb.transpose(1, 0, 2))
+            display.blit(chase_surf, (0, self.quad_h))
 
         #todo @Rune hier kan je jouw code toevoegen
         # 5. ----- The lane detection (Bottom-Right)

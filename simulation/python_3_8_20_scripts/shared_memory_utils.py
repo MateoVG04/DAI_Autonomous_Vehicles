@@ -170,6 +170,7 @@ class CarlaWrapper:
         waypoint = 2
         lidar_points = 3
         object_tracking = 4
+        chase_images = 5
 
     def __init__(self, filename, image_width: int, image_height: int, max_lidar_points: int):
         data_arrays = [
@@ -186,6 +187,10 @@ class CarlaWrapper:
                               reserved_count=100,
                               datatype=np.float32),
             SharedMemoryArray(data_shape=[image_height, image_width, 3],  # Object Tracking
+                              reserved_count=100,
+                              datatype=np.uint8),
+            ### Chase camera array
+            SharedMemoryArray(data_shape=[image_height, image_width, 3],
                               reserved_count=100,
                               datatype=np.uint8),
         ]
@@ -215,15 +220,45 @@ class CarlaWrapper:
     def read_image(self, index: int) -> np.ndarray:
         return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=index)
 
+    # ----- Raw Chase images
+    def write_chase_image(self, image: carla.Image):
+        array = np.frombuffer(image.raw_data, dtype=np.uint8)
+        array = array.reshape((image.height, image.width, 4))  # BGRA
+        array = array[:, :, :3]  # BGR (CARLA raw is BGRA, drop A)
+        array = np.ascontiguousarray(array)
+
+        self.shared_memory.write_data(
+            shared_array_index=self.CarlaDataType.chase_images.value,
+            input_data=array
+        )
+        return
+
+    def read_latest_chase_image(self) -> np.ndarray:
+        slot_index = self.latest_chase_image_index - 1
+        if slot_index == -1:
+            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.chase_images.value].reserved_count - 1
+        return self.shared_memory.read_data(
+            shared_array_index=self.CarlaDataType.chase_images.value,
+            slot_index=slot_index
+        )
+
+    @property
+    def latest_chase_image_index(self) -> int:
+        return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.chase_images.value)
+
     @property
     def latest_image_index(self) -> int:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)
 
     def read_latest_image(self) -> np.ndarray:
-        slot_index = self.latest_image_index -1
-        if slot_index == -1:
-            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.images.value].reserved_count - 1
-        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=slot_index)
+        idx = self.latest_chase_image_index
+        if idx == 0:
+            return None
+        slot_index = idx - 1
+        return self.shared_memory.read_data(
+            shared_array_index=self.CarlaDataType.chase_images.value,
+            slot_index=slot_index
+        )
 
     # ----- Object Detected
     @property

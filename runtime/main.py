@@ -254,7 +254,6 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     simstep = 0
     end_simulation = False
 
-    logger.info("Starting simulation - BUT NOT REALLY!!")
 
     #### Initialize the models
     model = TD3.load(rl_model_path, env=env)
