@@ -1,3 +1,5 @@
+THIS_IS_NOT_VALID_PYTHON
+
 import logging
 import math
 import random
@@ -33,6 +35,16 @@ from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 from visualization.MinimalHUD import MinimalHUD
 
 print("CARLA loaded from:", carla.__file__)
+import os, sys, time
+
+print("\n" + "="*80)
+print("BRANCH PROOF: THIS FILE IS EXECUTING")
+print("FILE:", os.path.abspath(__file__))
+print("CWD :", os.getcwd())
+print("PY  :", sys.executable)
+print("TIME:", time.strftime("%Y-%m-%d %H:%M:%S"))
+print("="*80 + "\n")
+sys.stdout.flush()
 
 # ==============================================================================
 # -- Remote Objects --------------------------------------------------------------
@@ -295,7 +307,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     simstep = 0
     end_simulation = False
 
-    logger.info("Starting simulation")
+    logger.info("Starting simulation - BUT NOT REALLY!!")
 
     #### Initialize the models
     model = TD3.load(rl_model_path, env=env)
@@ -323,15 +335,24 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                         action, _ = model.predict(obs, deterministic=True)
                         obs, reward, terminated, truncated, info = env.step(action)
                         ep_reward += reward
-
+                        yolo_dets = []
                         latest_image, _ = env.get_latest_image()
                         if latest_image     is not None:
-                            obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.5)
+                            obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.1)
                             obdt_result = obdt_results[0]
-                            boxes = obdt_result.boxes
 
-                        env.hud_logic()
-                        pygame.display.flip()
+                            # r.boxes.xyxy, r.boxes.conf, r.boxes.cls
+                            for i in range(len(obdt_result.boxes)):
+                                x1, y1, x2, y2 = obdt_result.boxes.xyxy[i].cpu().numpy()
+                                conf = float(obdt_result.boxes.conf[i].cpu().numpy())
+                                cls = int(obdt_result.boxes.cls[i].cpu().numpy())
+                                name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
+                                                                                            "names") else str(cls)
+                                yolo_dets.append((x1, y1, x2, y2, name, conf))
+
+                        env.hud_logic(
+                            yolo_detections=yolo_dets
+                        )
 
                 env.reset()
                 terminated = False

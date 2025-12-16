@@ -69,7 +69,9 @@ class RemoteCarlaEnv(gym.Env):
             (self.hud_width, self.hud_height),
             pygame.HWSURFACE | pygame.DOUBLEBUF
         )
-        pygame.display.set_caption("CARLA Simulation")
+        # pygame.display.set_caption("CARLA Simulation")
+        pygame.display.set_caption("Test 123")
+
         # Test connection and get observation dimension
         logger.info("Checking remote connection...")
         try:
@@ -83,9 +85,13 @@ class RemoteCarlaEnv(gym.Env):
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
 
-    def hud_logic(self):
+    def hud_logic(self, yolo_detections=None, distance_to_dest=0.0):
         self.hud.tick()
-        self.hud.render(self.display, vehicle=self.remote_env.ego_vehicle, distance_to_dest=float(self.remote_env.info.get("dist_to_goal", 0.0)))
+        self.hud.render(self.display, vehicle=None, distance_to_dest=float(distance_to_dest))
+
+        if yolo_detections:
+            self.hud.draw_yolo_overlay(yolo_detections, self.display)
+
         pygame.display.flip()
 
     def connect(self):

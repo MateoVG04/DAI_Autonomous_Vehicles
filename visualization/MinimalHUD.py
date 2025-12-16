@@ -1,12 +1,12 @@
 import math
-
+import time
 import cv2
 import numpy as np
 import pygame
-
+import os
 from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
-
+print("LOADED MinimalHUD FROM:", os.path.abspath(__file__))
 # ==============================================================================
 # -- HUD --------------------------------------------------------------
 # ==============================================================================
@@ -40,6 +40,17 @@ class MinimalHUD:
             camera_surf = pygame.surfarray.make_surface(frame_rgb.transpose(1, 0, 2))
             display.blit(camera_surf, (0, 0))
 
+        t = time.time()
+        pulse = int(128 + 127 * math.sin(t * 6.0))  # 0..255 pulsing
+        banner = pygame.Surface((520, 55), pygame.SRCALPHA)
+        banner.fill((255, 0, 255, 140))  # magenta translucent
+        display.blit(banner, (10, 10))
+
+        txt = self.font.render(f"RUNNING BRANCH HUD  |  t={t:.3f}", True, (0, 0, 0))
+        display.blit(txt, (20, 25))
+
+        pygame.draw.circle(display, (pulse, 255 - pulse, 255), (500, 37), 10)
+
         # 2. ----- LiDAR Points (Top-Right)
         # Draw new points onto the persistent fading surface
         lidar_points = self.shared_memory.read_latest_lidar_points()
@@ -70,8 +81,11 @@ class MinimalHUD:
         hud_surface = pygame.Surface((self.dim[0], self.dim[1]), pygame.SRCALPHA)
         hud_surface.fill((0, 0, 0, 0))
 
-        vel = vehicle.get_velocity()
-        speed_kmh = 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
+        if vehicle is None:
+            speed_kmh = 0.0
+        else:
+            vel = vehicle.get_velocity()
+            speed_kmh = 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
 
         detected_count = len(bboxes) if bboxes else '/'
         lines = [
@@ -208,6 +222,22 @@ class MinimalHUD:
 
         # ----- Blend with persistent surface
         self.lidar_surface.blit(temp_surface, (0, 0), special_flags=pygame.BLEND_ADD)
+
+    def draw_yolo_overlay(self, detections, display):
+        """
+        detections: list of tuples (x1, y1, x2, y2, label, conf)
+        Draws boxes on the TOP-LEFT camera quad.
+        """
+        surf = display  # pygame Surface
+        font = pygame.font.Font(pygame.font.get_default_font(), 18)
+
+        for x1, y1, x2, y2, label, conf in detections:
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            w, h = x2 - x1, y2 - y1
+
+            pygame.draw.rect(surf, (0, 255, 0), pygame.Rect(x1, y1, w, h), 2)
+            txt = font.render(f"{label} {conf:.2f}", True, (0, 255, 0))
+            surf.blit(txt, (x1, max(0, y1 - 18)))
 
     @staticmethod
     def handle_pygame_events():
