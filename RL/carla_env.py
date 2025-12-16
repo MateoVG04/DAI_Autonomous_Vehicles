@@ -8,6 +8,8 @@ import gymnasium as gym
 from agents.navigation.local_planner import LocalPlanner
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 from env_utils import build_state_vector, get_vehicle_speed_accel
+from simulation.python_3_8_20_scripts.camera_control import CameraManager
+from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
 # Initialize Logger
 logger = logging.getLogger(__name__)
@@ -74,7 +76,10 @@ class CarlaEnv(gym.Env):
         # Setup vehicle and sensors
         self.ego_vehicle = None
         self.col_sensor = None
-        self.camera_sensor = None
+        self.camera_width = 800
+        self.camera_height = 600
+        self.camera_manager = None
+        self.max_lidar_points = 120000
 
         # Planners
         self.grp = None
@@ -103,6 +108,13 @@ class CarlaEnv(gym.Env):
         self._init_world_settings()
         self._init_traffic_manager()
         self._load_map("Town04_Opt") # Start on first map
+
+        ## Setup shared memory
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
+                                     image_width=self.camera_width,
+                                     image_height=self.camera_height,
+                                     max_lidar_points=self.max_lidar_points)
 
         logger.info("Carla environment initialized")
 
@@ -184,18 +196,14 @@ class CarlaEnv(gym.Env):
         self.col_sensor.listen(self.collision_callback)
 
         # Camera
-        bp_rgb_cam = self.world.get_blueprint_library().find('sensor.camera.rgb')
-        bp_rgb_cam.set_attribute('image_size_x', '800')
-        bp_rgb_cam.set_attribute('image_size_y', '600')
-        bp_rgb_cam.set_attribute('fov', '90')
-        cam_transform = carla.Transform(
-            carla.Location(x=1.5, z=1.6),  # front & slightly above
-            carla.Rotation(pitch=0.0)
+        self.camera_manager = CameraManager(
+            client=self.client,
+            world=self.world,
+            parent_actor=self.ego_vehicle,
+            camera_width=self.camera_width,
+            camera_height=self.camera_height,
+            shared_memory=self.shared_memory
         )
-        self.camera_sensor = self.world.spawn_actor(
-            bp_rgb_cam, cam_transform, attach_to=self.ego_vehicle
-        )
-        self.camera_sensor.listen(self.camera_callback)
 
         logging.info("Sensors setup complete.")
 
@@ -610,10 +618,13 @@ class CarlaEnv(gym.Env):
             self.col_sensor.destroy()
             self.col_sensor = None
 
-        if self.camera_sensor and self.camera_sensor.is_alive:
-            if self.camera_sensor.is_listening: self.camera_sensor.stop()
-            self.camera_sensor.destroy()
-            self.camera_sensor = None
+        if self.camera_manager is not None:
+            for s in self.camera_manager.sensors:
+                if s is not None and s.is_alive:
+                    if s.is_listening:
+                        s.stop()
+                    s.destroy()
+            self.camera_manager = None
 
     def _cleanup_vehicle(self):
         if self.ego_vehicle and self.ego_vehicle.is_alive:
@@ -669,16 +680,15 @@ class CarlaEnv(gym.Env):
                 life_time=0.05  # Update every frame (assuming 20fps)
             )
     def get_latest_image(self):
-        if self.latest_rgb is None:
-            # nothing received yet
+        frame = self.shared_memory.read_latest_image()
+        if frame is None:
             return None, None, None
 
-            # latest_rgb is a numpy array (H, W, 3), dtype uint8
-        h, w, c = self.latest_rgb.shape
-        img_bytes = self.latest_rgb.tobytes()  # flat uint8 buffer
+        h, w, c = frame.shape
+        img_bytes = frame.tobytes()
 
-        # Return only builtin types: bytes + tuple + int
-        return img_bytes, (h, w, c), int(self.latest_frame_id)
+        # frame_id: if your shared memory wrapper stores it, return it; otherwise 0
+        return img_bytes, (h, w, c), 0
 
     def draw_detections(self, detections, img_width=800, img_height=600):
         """
