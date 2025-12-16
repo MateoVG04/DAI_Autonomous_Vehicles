@@ -311,7 +311,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                 drive_span.set_attribute("destination.distance", 0) # fixme
                 drive_span.set_attribute("loop.count_start", loop_count)
                 ep_reward = 0.0
-                while not (terminated or truncated)
+                while not (terminated or truncated):
                     simstep += 1
                     with tracer.start_as_current_span("control_loop") as loop_span:
                         # 1) Pygame events (non-blocking)
