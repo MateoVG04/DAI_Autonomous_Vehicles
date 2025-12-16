@@ -32,7 +32,7 @@ class MinimalHUD:
         self.clock.tick()
         self.fps = self.clock.get_fps()
 
-    def render(self, display, vehicle, distance_to_dest: float):
+    def render(self, display, vehicle, distance_to_dest: float, lane_dashboard=None):
         # 1. ----- RGB Camera (Top-Left)
         frame = self.shared_memory.read_latest_image()
         if frame is not None:
@@ -64,7 +64,25 @@ class MinimalHUD:
 
         #todo @Rune hier kan je jouw code toevoegen
         # 5. ----- The lane detection (Bottom-Right)
+        if lane_dashboard is not None:
+            try:
+                # The dashboard is already a 2x2 grid combined into one image.
+                # We just need to resize it to fit the bottom-right quadrant.
 
+                # 1. Resize
+                dash_resized = cv2.resize(lane_dashboard, (self.quad_w, self.quad_h))
+
+                # 2. Color Convert (OpenCV BGR -> Pygame RGB)
+                dash_rgb = cv2.cvtColor(dash_resized, cv2.COLOR_BGR2RGB)
+
+                # 3. Create Surface (Transpose for Pygame)
+                dash_surf = pygame.surfarray.make_surface(dash_rgb.transpose(1, 0, 2))
+
+                # 4. Blit to Bottom-Right coordinates
+                display.blit(dash_surf, (self.quad_w, self.quad_h))
+
+            except Exception as e:
+                print(f"HUD Error (Lane Dash): {e}")
         # 5. ----- HUD Text / Info Overlay
         self._render_hud_info(display, vehicle, distance_to_dest, bboxes)
 

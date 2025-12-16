@@ -11,6 +11,7 @@ from runtime.pyro_state import PyroStateServer
 #from runtime.pointpillars_lightweight.run.inference import CarlaWrapper
 from runtime.CarlaWrapper import CarlaWrapper
 from visualization.MinimalHUD import MinimalHUD
+from runtime.Distance import DistanceSystem
 
 """
 Carla Remote Environment accessed via Pyro4.
@@ -64,7 +65,7 @@ class RemoteCarlaEnv(gym.Env):
         pygame.display.set_caption("Test 123")
 
         ## Setup shared memory
-        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v6.dat"
         self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
                                           image_width=self.camera_width,
                                           image_height=self.camera_height,
@@ -86,9 +87,9 @@ class RemoteCarlaEnv(gym.Env):
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
 
-    def hud_logic(self, yolo_detections=None, distance_to_dest=0.0):
+    def hud_logic(self, yolo_detections=None, distance_to_dest=0.0, dashboard_img=None):
         self.hud.tick()
-        self.hud.render(self.display, vehicle=None, distance_to_dest=float(distance_to_dest))
+        self.hud.render(self.display, vehicle=None, distance_to_dest=float(distance_to_dest), lane_dashboard=dashboard_img)
 
         if yolo_detections:
             self.hud.draw_yolo_overlay(yolo_detections, self.display)

@@ -21,6 +21,7 @@ from ultralytics import YOLO
 from RL.carla_remote_env import RemoteCarlaEnv
 from agents.tools.misc import compute_distance, get_speed
 from visualization.MinimalHUD import MinimalHUD
+from runtime.Distance import DistanceSystem
 
 print("CARLA loaded from:", carla.__file__)
 
@@ -262,6 +263,17 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     terminated = False
     truncated = False
 
+    unet_model_path = "/home/shared/3_12_jupyter/bin/simulation/Model/unet_multiclass.pth"
+    print("Loading Distance/Lane System...")
+    # Use 'cuda' if available, otherwise 'cpu'
+    dist_system = DistanceSystem(
+        model_path=unet_model_path,
+        width=camera_width,
+        height=camera_height,
+        fov=90.0,
+        device='cuda'
+    )
+
     try:
         while not end_simulation:
             # Performing full run
@@ -312,10 +324,15 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                                 name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
                                                                                             "names") else str(cls)
                                 yolo_dets.append((x1, y1, x2, y2, name, conf))
-
+                        if latest_image     is not None and latest_lidar_cloud is not None:
+                            start = time.time()
+                            distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
+                            end = time.time()
+                            print("Distance time: "+ str(end-start)+"s")
                         start = time.time()
                         env.hud_logic(
-                            yolo_detections=yolo_dets
+                            yolo_detections=yolo_dets,
+                            dashboard_img=dashboard
                         )
                         end = time.time()
                         print("HUD logic time: "+ str(end-start)+"s")
