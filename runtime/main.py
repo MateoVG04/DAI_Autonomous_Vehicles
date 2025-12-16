@@ -312,7 +312,7 @@ if __name__ == '__main__':
     env = RemoteCarlaEnv()
     rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_3map_traffic_agent"
     # rl_model_path = "./RL/Model_TD3/td3_carla_500000"
-    obdt_model_path = "/home/shared/3_12_jupyter/bin/Machine_Vision/runs/Train8/best.pt"
+    obdt_model_path = "/home/shared/3_12_jupyter/bin/Machine_Vision/runs/best_model/best.pt"
     start = time.time()
     main(env, rl_model_path, obdt_model_path)
     end = time.time()
