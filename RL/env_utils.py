@@ -57,7 +57,7 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
     # --- CONSTANTS ---
     MAX_LOOKAHEAD_DIST = 50.0  # Max physical range for waypoints (m)
     MAX_REF_LATERAL = lane_width / 2.0  # Max lateral offset for normalization (m)
-    REF_SPEED = vehicle.get_speed_limit()  # Reference speed for normalization (~54 km/h)
+    REF_SPEED = 25 # Reference speed (m/s) = 90 km/h
     REF_ACCEL = 6.0  # Reference acceleration (m/s²)
 
     # --- 1. Waypoint Transformation (Polar) ---
@@ -110,14 +110,17 @@ def build_state_vector(vehicle, waypoints, frame_size, lane_width, speed, accel,
         cte_norm = 0.0
 
     # Safety
-    dist_norm = np.clip(dist_to_obj_ahead / MAX_LOOKAHEAD_DIST, 0, 1)
+    max_decel = 6.0  # m/s²
+    stopping_dist = speed ** 2 / (2 * max_decel) + 5.0
+    dist = dist_to_obj_ahead / stopping_dist
+    dist_norm = np.clip(dist, 0, 1)
 
     # --- 3. Final Vector Assembly ---
     final_state = np.concatenate([
         np.array(polar_coords, dtype=np.float32),  # Path Geometry (Angle/Distance)
         np.array([speed_norm], dtype=np.float32),  # Dynamics
         np.array([accel_norm], dtype=np.float32),  # Acceleration
-        np.array([steering_norm], dtype=np.float32),  # Current Control Command (Proprioception)
+        np.array([steering_norm], dtype=np.float32),  # Proprioception
         np.array([cte_norm], dtype=np.float32),  # Immediate Lateral Error (Lane Centering)
         np.array([dist_norm], dtype=np.float32),  # Radar Distance
     ])
