@@ -292,17 +292,6 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     meter = metrics.get_meter(__name__)
     distance_hist, speed_hist = setup_vehicle_metrics(meter=meter)
 
-    # Pygame
-    pygame.init()
-    pygame.font.init()
-    hud_width = camera_width * 2  # double width for camera + LiDAR
-    hud_height = camera_height * 2
-    display = pygame.display.set_mode(
-        (hud_width, hud_height),
-        pygame.HWSURFACE | pygame.DOUBLEBUF
-    )
-    pygame.display.set_caption("CARLA Simulation")
-
     simstep = 0
     end_simulation = False
 
@@ -322,7 +311,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                 drive_span.set_attribute("destination.distance", 0) # fixme
                 drive_span.set_attribute("loop.count_start", loop_count)
                 ep_reward = 0.0
-                while not terminated or not truncated:
+                while not (terminated or truncated)
                     simstep += 1
                     with tracer.start_as_current_span("control_loop") as loop_span:
                         # 1) Pygame events (non-blocking)
@@ -341,11 +330,12 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                             obdt_result = obdt_results[0]
                             boxes = obdt_result.boxes
 
-                        env.hud_tick()
-                        env.hud_render()
+                        env.hud_logic()
                         pygame.display.flip()
 
                 env.reset()
+                terminated = False
+                truncated = False
                 logger.info("Destination reached")
     except Exception as e:
         print("Exception: {}".format(e))
