@@ -62,6 +62,9 @@ class MinimalHUD:
             obj_surf = pygame.surfarray.make_surface(obj_frame.transpose(1, 0, 2))
             display.blit(obj_surf, (0, self.quad_h))
 
+        #todo @Rune hier kan je jouw code toevoegen
+        # 5. ----- The lane detection (Bottom-Right)
+
         # 5. ----- HUD Text / Info Overlay
         self._render_hud_info(display, vehicle, distance_to_dest, bboxes)
 
