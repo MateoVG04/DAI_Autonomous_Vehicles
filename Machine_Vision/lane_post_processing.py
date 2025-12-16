@@ -3,186 +3,294 @@ import cv2
 from collections import deque
 
 
-class LaneBlobDetector:
+class DirectLaneTracer:
     def __init__(self, img_h=600, img_w=800):
         self.h = img_h
         self.w = img_w
-        self.seed_point = (img_w // 2, img_h - 20)
 
-        # 1. KERNELS
-        self.kernel_vertical = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 150))
-        self.kernel_square = np.ones((5, 5), np.uint8)
+        # --- 1. CONFIGURATION ---
+        self.horizon_y = 290
+        self.hood_y = self.h - 20
+        self.lane_width_bottom = 600
+        self.lane_width_top = 40
+        self.pixels_per_meter = self.h / 80.0  # Approximation
+        self.max_lidar_range = 50.0
 
-        # 2. GEOMETRY
-        self.standard_lane_width = 500
-        self.width_top = 50
-        self.horizon_y = 320
-        self.width_slope = (self.standard_lane_width - self.width_top) / (self.h - self.horizon_y)
-        self.width_intercept = self.standard_lane_width - (self.width_slope * self.h)
+        # --- 2. SMOOTHING ---
+        self.last_valid_path = None
+        self.dist_history = deque(maxlen=5)
+        self.current_distance = float('inf')
 
-        # 3. SMOOTHING
-        self.history = 8
-        self.center_fit_history = deque(maxlen=self.history)
-        self.avg_center_fit = None
+    def process(self, multiclass_mask, lidar_depth_img, original_image):
+        # 1. CREATE BARRIERS
+        barriers = self._create_barrier_mask(multiclass_mask)
 
-    def process(self, multiclass_mask, original_image):
-        # --- PHASE 1: GET THE BLOB ---
-        is_background = (multiclass_mask == 0)
-        is_line = (multiclass_mask == 2)
-        walls = np.zeros_like(multiclass_mask, dtype=np.uint8)
-        walls[is_background] = 255
-        walls[is_line] = 255
+        # 2. SCAN LANE
+        path_points, debug_data = self._scan_lane(barriers, self.horizon_y)
 
-        walls_closed = cv2.morphologyEx(walls, cv2.MORPH_CLOSE, self.kernel_vertical)
-        walls_closed = cv2.dilate(walls_closed, self.kernel_square, iterations=1)
-
-        drivable_map = cv2.bitwise_not(walls_closed)
-        h, w = drivable_map.shape
-        fill_mask = np.zeros((h + 2, w + 2), np.uint8)
-
-        sx, sy = self.seed_point
-        if drivable_map[sy, sx] == 0:
-            if drivable_map[sy - 50, sx] != 0:
-                seed = (sx, sy - 50)
-            else:
-                return self._draw_from_history(original_image)
+        # 3. HISTORY
+        if len(path_points) < 5:
+            if self.last_valid_path is not None:
+                path_points = self.last_valid_path
         else:
-            seed = (sx, sy)
+            self.last_valid_path = path_points
 
-        cv2.floodFill(drivable_map, fill_mask, seed, 128)
-        ego_lane_mask = (drivable_map == 128).astype(np.uint8) * 255
+        # 4. MEASURE DISTANCE (SENSOR FUSION)
+        # Check Lidar
+        lidar_cutoff, lidar_dist = self._measure_depth_in_lane(lidar_depth_img, path_points)
+        # Check Vision (Mask Holes)
+        vision_cutoff, vision_dist = self._measure_vision_obstacle(multiclass_mask, path_points)
 
-        return self._fit_and_draw(ego_lane_mask, original_image)
-
-    def _fit_and_draw(self, blob_mask, image):
-        y_coords, x_coords = np.nonzero(blob_mask)
-        if len(y_coords) < 500: return self._draw_from_history(image)
-
-        # 1. Extract Edges
-        sorted_indices = np.argsort(y_coords)
-        y_sorted = y_coords[sorted_indices]
-        x_sorted = x_coords[sorted_indices]
-
-        unique_y, indices = np.unique(y_sorted, return_index=True)
-
-        row_min_x = []
-        row_max_x = []
-        valid_y = []
-
-        step = 5
-        for i in range(0, len(indices) - 1, step):
-            idx = indices[i]
-            next_idx = indices[i + 1] if i + 1 < len(indices) else len(x_sorted)
-            row_xs = x_sorted[idx:next_idx]
-            if len(row_xs) > 0:
-                row_min_x.append(np.min(row_xs))
-                row_max_x.append(np.max(row_xs))
-                valid_y.append(unique_y[i])
-
-        if len(valid_y) < 20: return self._draw_from_history(image)
-
-        row_min_x = np.array(row_min_x)
-        row_max_x = np.array(row_max_x)
-        valid_y = np.array(valid_y)
-
-        # --- 2. GENERATE CANDIDATES ---
-        # Instead of averaging Min and Max, we create two potential "Center Lines"
-
-        # Candidate 1: Based on Left Edge
-        # Center = Left + HalfWidth(y)
-        width_profile = self._get_width_array(valid_y)
-        cand_left_x = row_min_x + (width_profile / 2.0)
-
-        # Candidate 2: Based on Right Edge
-        # Center = Right - HalfWidth(y)
-        cand_right_x = row_max_x - (width_profile / 2.0)
-
-        # --- 3. SELECTION LOGIC (History + Leak Check) ---
-
-        # Check for Leak (Is the blob ridiculously wide?)
-        # We calculate the average width of the blob itself
-        blob_width_avg = np.mean(row_max_x - row_min_x)
-
-        # Standard lane is ~500. Leak is > 650.
-        is_leaking = blob_width_avg > 650
-
-        if not is_leaking:
-            # NO LEAK: The blob is perfect. Average both sides for stability.
-            best_x = (row_min_x + row_max_x) / 2.0
+        # Pick the closest obstacle (Highest Cutoff Y)
+        if lidar_cutoff > vision_cutoff:
+            final_cutoff = lidar_cutoff
+            final_dist = lidar_dist
         else:
-            # LEAK DETECTED: We must pick ONE side.
+            final_cutoff = vision_cutoff
+            final_dist = vision_dist
 
-            # If we have history, compare curvature
-            if self.avg_center_fit is not None:
-                # Predict where the center SHOULD be based on history
-                hist_poly = np.poly1d(self.avg_center_fit)
-                hist_x = hist_poly(valid_y)
+        # Smooth final distance
+        self.dist_history.append(final_dist)
+        valid = [d for d in self.dist_history if d != float('inf')]
+        if len(valid) > 0:
+            self.current_distance = np.mean(valid)
+        else:
+            self.current_distance = float('inf')
 
-                # Calculate Error (Difference from history)
-                # RMSE (Root Mean Squared Error)
-                diff_left = np.sqrt(np.mean((cand_left_x - hist_x) ** 2))
-                diff_right = np.sqrt(np.mean((cand_right_x - hist_x) ** 2))
+        # --- DASHBOARD ---
+        return self._create_dashboard(original_image, multiclass_mask, barriers, path_points, debug_data, final_cutoff,
+                                      lidar_depth_img)
 
-                # Pick the one that deviates less from the past
-                if diff_left < diff_right:
-                    best_x = cand_left_x
+    def _measure_vision_obstacle(self, mask, path_points):
+        """
+        Scans the predicted path on the U-Net mask.
+        If we hit 'Class 0' (Background/Car) while following the lane, STOP.
+        """
+        if path_points is None or len(path_points) < 2: return 0, float('inf')
+
+        # Extract Road (1) and Lines (2)
+        drivable = (mask > 0).astype(np.uint8)
+
+        cutoff_y = 0
+
+        # Walk up the path from bottom to top
+        # path_points is ordered [Bottom -> Top]
+        for i in range(len(path_points)):
+            cx, cy = path_points[i]
+
+            # Check a small window around the center point
+            # If the majority of pixels are 0 (Background), we hit a car
+            window = drivable[cy - 2:cy + 2, cx - 10:cx + 10]
+            if window.size == 0: continue
+
+            # Ratio of drivable pixels
+            drivable_ratio = np.count_nonzero(window) / window.size
+
+            if drivable_ratio < 0.3:  # Less than 30% road? Obstacle!
+                cutoff_y = cy
+                # Simple geometric distance calc
+                px_offset = cy - self.horizon_y
+                if px_offset > 0:
+                    dist = 720.0 / px_offset
+                    return cutoff_y, dist
+                break
+
+        return 0, float('inf')
+
+    def _measure_depth_in_lane(self, depth_img, path_points):
+        if depth_img is None or path_points is None or len(path_points) < 2:
+            return 0, float('inf')
+
+        # Create lane mask
+        lane_mask = np.zeros((self.h, self.w), dtype=np.uint8)
+        pts_left = []
+        pts_right = []
+        for (x, y) in path_points:
+            progress = (self.hood_y - y) / (self.hood_y - self.horizon_y)
+            width = self.lane_width_bottom - (progress * (self.lane_width_bottom - self.lane_width_top))
+            width *= 0.5  # Narrow check
+            pts_left.append([x - width / 2, y])
+            pts_right.append([x + width / 2, y])
+        pts_right.reverse()
+        pts = np.array(pts_left + pts_right, dtype=np.int32)
+        cv2.fillPoly(lane_mask, [pts], 255)
+
+        # Check intensity
+        depth_channel = depth_img[:, :, 0]
+        lane_pixels = cv2.bitwise_and(depth_channel, depth_channel, mask=lane_mask)
+
+        max_val = np.max(lane_pixels)
+
+        if max_val > 20:
+            norm_val = max_val / 255.0
+            dist = self.max_lidar_range * (1.0 - norm_val)
+            max_loc = np.where(lane_pixels == max_val)
+            cutoff_y = np.max(max_loc[0])
+            return cutoff_y, dist
+
+        return 0, float('inf')
+
+    def _create_barrier_mask(self, mask):
+        lines = (mask == 2).astype(np.uint8) * 255
+        road = (mask == 1).astype(np.uint8) * 255
+        edges = cv2.Canny(road, 100, 200)
+        barriers = cv2.bitwise_or(lines, edges)
+        kernel = np.ones((3, 3), np.uint8)
+        barriers = cv2.dilate(barriers, kernel, iterations=1)
+        roi_mask = np.zeros_like(barriers)
+        pts = np.array(
+            [[(0, self.h), (self.w, self.h), (self.w // 2 + 100, self.horizon_y), (self.w // 2 - 100, self.horizon_y)]],
+            dtype=np.int32)
+        cv2.fillPoly(roi_mask, pts, 255)
+        return cv2.bitwise_and(barriers, roi_mask)
+
+    def _scan_lane(self, barriers, cutoff_y_ignored):
+        # We scan fully, ignoring distance for now
+        center_x = self.w // 2
+        path_points = []
+        dx = 0
+        debug_left = []
+        debug_right = []
+        consecutive_lost = 0
+        scan_step = 8
+        n_steps = (self.hood_y - self.horizon_y) // scan_step
+
+        for i in range(n_steps):
+            y = self.hood_y - (i * scan_step)
+
+            predicted_center = center_x + dx
+            predicted_center = max(50, min(self.w - 50, int(predicted_center)))
+            progress = i / n_steps
+            expected_width = self.lane_width_bottom - (progress * (self.lane_width_bottom - self.lane_width_top))
+
+            if expected_width < 25: break
+            search_radius = int(expected_width * 0.7)
+            row = barriers[y, :]
+
+            l_bound = max(0, int(predicted_center - search_radius))
+            l_strip = row[l_bound:int(predicted_center)]
+            l_hits = np.nonzero(l_strip)[0]
+            found_l = False
+            lx = 0
+            if len(l_hits) > 0:
+                lx = l_bound + l_hits[-1]
+                found_l = True
+                debug_left.append((lx, y))
+
+            r_bound = min(self.w, int(predicted_center + search_radius))
+            r_strip = row[int(predicted_center):r_bound]
+            r_hits = np.nonzero(r_strip)[0]
+            found_right = False
+            rx = 0
+            if len(r_hits) > 0:
+                rx = int(predicted_center) + r_hits[0]
+                found_right = True
+                debug_right.append((rx, y))
+
+            prev_center = center_x
+            valid_detection = False
+
+            if found_l and found_right:
+                width = rx - lx
+                if (expected_width * 0.5) < width < (expected_width * 1.6):
+                    center_x = (lx + rx) // 2
+                    valid_detection = True
                 else:
-                    best_x = cand_right_x
+                    d_l = abs((lx + expected_width / 2) - predicted_center)
+                    d_r = abs((rx - expected_width / 2) - predicted_center)
+                    if d_l < d_r:
+                        center_x = int(lx + expected_width / 2)
+                    else:
+                        center_x = int(rx - expected_width / 2)
+                    valid_detection = True
+            elif found_l:
+                center_x = int(lx + (expected_width / 2))
+                valid_detection = True
+            elif found_right:
+                center_x = int(rx - (expected_width / 2))
+                valid_detection = True
+
+            if valid_detection:
+                consecutive_lost = 0
+                current_dx = center_x - prev_center
+                if abs(current_dx) > 25 and i > 5:
+                    center_x = int(predicted_center)
+                else:
+                    dx = dx * 0.7 + current_dx * 0.3
             else:
-                # No history? Fallback to Distance from Image Center
-                img_center = self.w / 2
-                dist_l = abs(np.mean(cand_left_x) - img_center)
-                dist_r = abs(np.mean(cand_right_x) - img_center)
-                best_x = cand_left_x if dist_l < dist_r else cand_right_x
+                consecutive_lost += 1
+                if consecutive_lost > 30: break
+                center_x = int(predicted_center)
+                dx *= 0.98
 
-        # 4. Fit Polynomial
-        center_fit = self._fit_smart_center(valid_y, best_x)
+            if i == 0: center_x = (center_x + (self.w // 2)) // 2; dx = 0
+            path_points.append((int(center_x), y))
 
-        # 5. Update History
-        self.center_fit_history.append(center_fit)
-        self.avg_center_fit = np.mean(self.center_fit_history, axis=0)
+        return path_points, (debug_left, debug_right)
 
-        return self._draw_from_history(image)
+    def _draw_results(self, image, path_points, cutoff_y):
+        if path_points is None or len(path_points) < 2: return image
+        overlay = np.zeros_like(image, dtype=np.uint8)
 
-    def _get_width_array(self, y_values):
-        return (self.width_slope * y_values) + self.width_intercept
+        path_arr = np.array(path_points)
+        x_pts = path_arr[:, 0]
+        y_pts = path_arr[:, 1]
 
-    def _fit_smart_center(self, y, x):
-        fit_lin = np.polyfit(y, x, 1)
-        p_lin = np.poly1d(fit_lin)
-        error_lin = np.sqrt(np.mean((x - p_lin(y)) ** 2))
+        box = np.ones(5) / 5
+        if len(x_pts) > 5: x_pts = np.convolve(x_pts, box, mode='same')
 
-        # Sanity: If extremely straight, force linear
-        if error_lin < 8.0:
-            return np.array([0.0, fit_lin[0], fit_lin[1]])
+        pts_left = []
+        pts_right = []
 
-        fit_poly = np.polyfit(y, x, 2)
-        p_poly = np.poly1d(fit_poly)
-        error_poly = np.sqrt(np.mean((x - p_poly(y)) ** 2))
+        for i in range(len(x_pts)):
+            x = x_pts[i]
+            y = y_pts[i]
+            # Draw UP TO cutoff
+            if cutoff_y > 0 and y < cutoff_y: break
 
-        # Only curve if error improvement is significant (>50%)
-        if error_poly < (error_lin * 0.5):
-            return fit_poly
+            progress = (self.hood_y - y) / (self.hood_y - self.horizon_y)
+            width = self.lane_width_bottom - (progress * (self.lane_width_bottom - self.lane_width_top))
+            width *= 0.8
+            pts_left.append([x - width / 2, y])
+            pts_right.append([x + width / 2, y])
+
+        pts_right.reverse()
+        if len(pts_left) > 0:
+            pts = np.array(pts_left + pts_right, dtype=np.int32)
+            cv2.fillPoly(overlay, [pts], (0, 255, 0))
+
+        final_img = cv2.addWeighted(image, 1, overlay, 0.4, 0)
+
+        if self.current_distance < 45:
+            txt = f"Dist: {self.current_distance:.1f} m"
+            col = (0, 0, 255)
         else:
-            return np.array([0.0, fit_lin[0], fit_lin[1]])
+            txt = "Path Clear"
+            col = (0, 255, 0)
+        cv2.putText(final_img, txt, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, col, 3)
+        return final_img
 
-    def _draw_from_history(self, image):
-        if self.avg_center_fit is None: return image
+    def _create_dashboard(self, image, mask, barriers, path, debug_data, cutoff_y, lidar_bev):
+        viz_model = np.zeros_like(image)
+        viz_model[mask == 1] = [255, 0, 255]
+        viz_model[mask == 2] = [0, 255, 255]
+        cv2.putText(viz_model, "1. U-Net", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        ploty = np.linspace(self.horizon_y, self.h - 1, self.h - self.horizon_y)
+        # Colorize Lidar
+        if lidar_bev is not None:
+            viz_lidar = lidar_bev.copy()
+            viz_lidar = cv2.applyColorMap(viz_lidar, cv2.COLORMAP_TURBO)
+        else:
+            viz_lidar = np.zeros_like(image)
+        cv2.putText(viz_lidar, "2. Lidar Depth", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        center_line = self.avg_center_fit[0] * ploty ** 2 + self.avg_center_fit[1] * ploty + self.avg_center_fit[2]
+        final_res = self._draw_results(image, path, cutoff_y)
+        cv2.putText(final_res, "3. Result", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        t = (ploty - self.horizon_y) / (self.h - self.horizon_y)
-        width_profile = self.width_top + t * (self.standard_lane_width - self.width_top)
-
-        left_fitx = center_line - width_profile / 2
-        right_fitx = center_line + width_profile / 2
-
-        color_warp = np.zeros_like(image).astype(np.uint8)
-        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
-        pts = np.hstack((pts_left, pts_right))
-
-        cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
-        return cv2.addWeighted(image, 1, color_warp, 0.4, 0)
+        scale = 0.5
+        h, w = int(self.h * scale), int(self.w * scale)
+        return np.hstack([
+            cv2.resize(viz_model, (w, h)),
+            cv2.resize(viz_lidar, (w, h)),
+            cv2.resize(final_res, (w, h))
+        ])
