@@ -72,6 +72,7 @@ services:
     volumes:
       - ./pointpillars_lightweight/carla_kitti:/workspace/carla_kitti
       - ./pointpillars_lightweight/run:/workspace/run
+      - ./pointpillars_lightweight/PointPillars/pillar_logs:/workspace/PointPillars/pillar_logs
       - ./pointpillars_lightweight/PointPillars/pointpillars/dataset:/workspace/PointPillars/pointpillars/dataset
       - /dev/shm:/dev/shm
     command: python3 run/inference.py

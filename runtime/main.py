@@ -45,7 +45,7 @@ class PyroStateServer:
 
     # -----
     # LiDAR Specific Communication
-    def update_lidar_result(self, bboxes: np.ndarray, labels: np.ndarray, scores: np.ndarray):
+    def update_lidar_result(self, bboxes: np.ndarray, labels: np.ndarray, scores: np.ndarray, raw_detects: int):
         """
         Called by the inference loop to save new results
         """
@@ -54,7 +54,8 @@ class PyroStateServer:
             self.latest_lidar_result = {
                 "bboxes": bboxes.tolist() if isinstance(bboxes, np.ndarray) else bboxes,
                 "labels": labels.tolist() if isinstance(labels, np.ndarray) else labels,
-                "scores": scores.tolist() if isinstance(scores, np.ndarray) else scores
+                "scores": scores.tolist() if isinstance(scores, np.ndarray) else scores,
+                "raw_detects": raw_detects
             }
 
     def get_latest_lidar_result(self):
@@ -112,6 +113,7 @@ class MinimalHUD:
         # We fetch the latest results
         lidar_result = self.pyro_state_server.get_latest_lidar_result()
         bboxes = lidar_result.get('bboxes', [])
+        raw_detected_count = lidar_result.get('raw_detected_count', None) or '/'
 
         # We draw boxes on a fresh transparent surface to avoid "smearing"
         if bboxes and len(bboxes) > 0:
@@ -124,26 +126,27 @@ class MinimalHUD:
             display.blit(obj_surf, (0, self.quad_h))
 
         # 5. ----- HUD Text / Info Overlay
-        self._render_hud_info(display, vehicle, distance_to_dest, bboxes)
+        self._render_hud_info(display, vehicle, distance_to_dest, bboxes, raw_detected_count)
 
-    def _render_hud_info(self, display, vehicle, distance, bboxes):
+    def _render_hud_info(self, display, vehicle, distance, bboxes, raw_detected_count):
         """Helper to keep render method clean"""
         hud_surface = pygame.Surface((self.dim[0], self.dim[1]), pygame.SRCALPHA)
         hud_surface.fill((0, 0, 0, 0))
 
         vel = vehicle.get_velocity()
         speed_kmh = 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
-
         detected_count = len(bboxes) if bboxes else '/'
+
         lines = [
             f"Speed: {speed_kmh:6.1f} km/h",
             f"Distance: {distance:7.1f} m",
             f"FPS: {self.fps:5.1f}",
-            f"Detected: {detected_count} objects",
+            f"LIDAR Detected: {detected_count} objects",
+            f"Raw LIDAR: {raw_detected_count} objects",
         ]
 
         # Semi-transparent background box
-        info_bg = pygame.Surface((260, 90))
+        info_bg = pygame.Surface((20* len(lines) + 10, 90))
         info_bg.fill((0, 0, 0))
         info_bg.set_alpha(140)
         display.blit(info_bg, (10, 10))
