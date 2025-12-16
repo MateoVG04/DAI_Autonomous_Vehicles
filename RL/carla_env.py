@@ -4,12 +4,14 @@ import numpy as np
 import Pyro4
 import carla
 import gymnasium as gym
+import pygame
 
 from agents.navigation.local_planner import LocalPlanner
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 from env_utils import build_state_vector, get_vehicle_speed_accel
 from simulation.python_3_8_20_scripts.camera_control import CameraManager, LiDARManager
 from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
+from visualization.MinimalHUD import MinimalHUD
 
 # Initialize Logger
 logger = logging.getLogger(__name__)
@@ -117,6 +119,19 @@ class CarlaEnv(gym.Env):
         self._init_traffic_manager()
         self._load_map("Town04_Opt") # Start on first map
 
+        self.hud_width = self.camera_width * 2  # double width for camera + LiDAR
+        self.hud_height = self.camera_height * 2
+        self.hud = MinimalHUD(self.hud_width, self.hud_height, shared_memory=self.shared_memory, pyro_state_server=self.pyro_state_server)
+
+        # Pygame
+        pygame.init()
+        pygame.font.init()
+        self.display = pygame.display.set_mode(
+            (self.hud_width, self.hud_height),
+            pygame.HWSURFACE | pygame.DOUBLEBUF
+        )
+        pygame.display.set_caption("CARLA Simulation")
+
         logger.info("Carla environment initialized")
 
     def _init_world_settings(self):
@@ -219,6 +234,11 @@ class CarlaEnv(gym.Env):
                              )
 
         logging.info("Sensors setup complete.")
+
+    def hud_logic(self):
+        self.hud.tick()
+        self.hud.render(self.display, vehicle=self.ego_vehicle, distance_to_dest=float(self.info.get("dist_to_goal", 0.0)))
+        pygame.display.flip()
 
     def collision_callback(self, event):
         self.collision_history.append(event)
@@ -468,8 +488,8 @@ class CarlaEnv(gym.Env):
             truncated = self.episode_step >= MAX_STEPS
 
             self._render_hud(reward)
-
-            return obs.tolist(), float(reward), bool(terminated), bool(truncated), {}
+            self.info = {}
+            return obs.tolist(), float(reward), bool(terminated), bool(truncated), self.info
 
         except Exception as e:
             logger.exception("Step Error")

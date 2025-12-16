@@ -4,7 +4,9 @@ import numpy as np
 import logging
 import time
 import serpent
+import threading
 
+from runtime.main import PyroStateServer
 
 """
 Carla Remote Environment accessed via Pyro4.
@@ -14,6 +16,13 @@ logger = logging.getLogger(__name__)
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(stream_handler)
+
+def start_pyro_daemon(logger, state_obj, pyro_name: str, port=9090):
+    """Starts the Pyro4 server in a background thread"""
+    daemon = Pyro4.Daemon(host="0.0.0.0", port=port)
+    uri = daemon.register(state_obj, pyro_name)
+    logger.info(f"Pyro4 Server Running! Object URI: {uri}")
+    daemon.requestLoop()
 
 # Proxy class to interact with the remote Carla environment
 class RemoteCarlaEnv(gym.Env):
@@ -27,6 +36,13 @@ class RemoteCarlaEnv(gym.Env):
 
         # Establish Pyro4 connection to remote Carla environment
         self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
+        # Pyro
+        self.pyro_name = "pyrostateserver"
+        self.pyro_port = 9090
+        self.pyro_state_server = PyroStateServer()
+        self.pyro_thread = threading.Thread(target=start_pyro_daemon,
+                                       args=(logger, self.pyro_state_server, self.pyro_name, self.pyro_port), daemon=True)
+        self.pyro_thread.start()
 
         # Test connection and get observation dimension
         logger.info("Checking remote connection...")
@@ -65,6 +81,12 @@ class RemoteCarlaEnv(gym.Env):
             self.connect()
 
 
+    def hud_tick(self):
+        self.remote_env.hud_tick()
+
+    def hud_render(self):
+        self.remote_env.hud_render()
+
     def step(self, action: list):
         """Takes a step in the remote environment using the provided action."""
         try:
@@ -75,7 +97,8 @@ class RemoteCarlaEnv(gym.Env):
         except Exception:
             logger.warning("Connection lost during STEP. Waiting for server restart...")
             self.connect()
-            return self.reset()
+            obs, info = self.reset()
+            return obs, 0.0, True, True, info
 
     def close(self):
         try:
