@@ -506,11 +506,14 @@ def main():
     distance_hist, speed_hist = setup_vehicle_metrics(meter=meter)
 
     logger.info("carla_env.Client setup started")
+    """"""
     carla_client = carla.Client('localhost', 2000)
+    """"""
     setup_carla(logger=logger, client=carla_client)
     logger.info("Carla Client started setup finished")
 
     # shared mem
+    """"""
     shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
     shared_memory = CarlaWrapper(filename=shared_memory_filepath,
                                  image_width=camera_width,
@@ -549,11 +552,12 @@ def main():
     world.tick()  # fixme test if this is required
 
     logger.info("Setting up cameras")
+    """"""
     camera = CameraManager(client=carla_client, world=world, parent_actor=vehicle,
                            camera_width=camera_width,
                            camera_height=camera_height,
                            shared_memory=shared_memory)
-
+    """"""
     lidar = LiDARManager(client=carla_client,
                          world=world,
                          parent_actor=vehicle,

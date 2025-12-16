@@ -97,6 +97,17 @@ class RemoteCarlaEnv(gym.Env):
 
         return img_np, frame_id
 
+    def get_latest_lidar_points(self):
+        raw, shape = self.remote_env.get_latest_lidar_points()
+        if raw is None or shape is None:
+            return None
+
+        # Same issue as image bytes: ensure raw is real bytes
+        raw = serpent.tobytes(raw)
+
+        pts = np.frombuffer(raw, dtype=np.float32).reshape(shape)
+        return pts
+
     def draw_detections(self, detections, img_width=800, img_height=600):
         """
         Forward YOLO detections to remote CarlaEnv for debug drawing.

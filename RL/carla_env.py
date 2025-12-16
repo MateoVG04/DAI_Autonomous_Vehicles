@@ -8,7 +8,7 @@ import gymnasium as gym
 from agents.navigation.local_planner import LocalPlanner
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 from env_utils import build_state_vector, get_vehicle_speed_accel
-from simulation.python_3_8_20_scripts.camera_control import CameraManager
+from simulation.python_3_8_20_scripts.camera_control import CameraManager, LiDARManager
 from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 
 # Initialize Logger
@@ -80,6 +80,14 @@ class CarlaEnv(gym.Env):
         self.camera_height = 600
         self.camera_manager = None
         self.max_lidar_points = 120000
+        self.lidar_manager = None
+
+        ## Setup shared memory
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
+                                          image_width=self.camera_width,
+                                          image_height=self.camera_height,
+                                          max_lidar_points=self.max_lidar_points)
 
         # Planners
         self.grp = None
@@ -108,13 +116,6 @@ class CarlaEnv(gym.Env):
         self._init_world_settings()
         self._init_traffic_manager()
         self._load_map("Town04_Opt") # Start on first map
-
-        ## Setup shared memory
-        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
-        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
-                                     image_width=self.camera_width,
-                                     image_height=self.camera_height,
-                                     max_lidar_points=self.max_lidar_points)
 
         logger.info("Carla environment initialized")
 
@@ -204,6 +205,18 @@ class CarlaEnv(gym.Env):
             camera_height=self.camera_height,
             shared_memory=self.shared_memory
         )
+
+        # Lidar
+        self.lidar_manager = LiDARManager(client=self.client,
+                             world=self.world,
+                             parent_actor=self.ego_vehicle,
+                             shared_memory=self.shared_memory,
+                             range_m=50.0,
+                             channels=64,
+                             points_per_second=1300000,
+                             rotation_frequency=10.0,
+                             z_offset=1.73
+                             )
 
         logging.info("Sensors setup complete.")
 
@@ -626,6 +639,10 @@ class CarlaEnv(gym.Env):
                     s.destroy()
             self.camera_manager = None
 
+        if self.lidar_manager is not None:
+            self.lidar_manager.destroy()
+            self.lidar_manager = None
+
     def _cleanup_vehicle(self):
         if self.ego_vehicle and self.ego_vehicle.is_alive:
             self.ego_vehicle.destroy()
@@ -689,6 +706,15 @@ class CarlaEnv(gym.Env):
 
         # frame_id: if your shared memory wrapper stores it, return it; otherwise 0
         return img_bytes, (h, w, c), 0
+
+    def get_latest_lidar_points(self):
+        points = self.shared_memory.read_latest_lidar_points()
+        if points is None:
+            return None, None
+
+        # points is (N, 4) float32
+        return points.tobytes(), points.shape
+
 
     def draw_detections(self, detections, img_width=800, img_height=600):
         """
