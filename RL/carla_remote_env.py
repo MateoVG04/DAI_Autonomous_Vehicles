@@ -7,8 +7,9 @@ import serpent
 import threading
 import pygame
 
-from runtime.main import PyroStateServer
-from runtime.pointpillars_lightweight.run.inference import CarlaWrapper
+from runtime.pyro_state import PyroStateServer
+#from runtime.pointpillars_lightweight.run.inference import CarlaWrapper
+from runtime.CarlaWrapper import CarlaWrapper
 from visualization.MinimalHUD import MinimalHUD
 
 """
@@ -39,6 +40,8 @@ class RemoteCarlaEnv(gym.Env):
         self.camera_width = 800
         self.camera_height = 600
         self.max_lidar_points = 120000
+        self.hud_width = self.camera_width * 2  # double width for camera + LiDAR
+        self.hud_height = self.camera_height * 2
 
         # Establish Pyro4 connection to remote Carla environment
         self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
@@ -50,18 +53,6 @@ class RemoteCarlaEnv(gym.Env):
                                        args=(logger, self.pyro_state_server, self.pyro_name, self.pyro_port), daemon=True)
         self.pyro_thread.start()
 
-        ## Setup shared memory
-        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
-        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
-                                          image_width=self.camera_width,
-                                          image_height=self.camera_height,
-                                          max_lidar_points=self.max_lidar_points)
-
-        self.hud_width = self.camera_width * 2  # double width for camera + LiDAR
-        self.hud_height = self.camera_height * 2
-        self.hud = MinimalHUD(self.hud_width, self.hud_height, shared_memory=self.shared_memory,
-                              pyro_state_server=self.pyro_state_server)
-
         # Pygame
         pygame.init()
         pygame.font.init()
@@ -71,6 +62,16 @@ class RemoteCarlaEnv(gym.Env):
         )
         # pygame.display.set_caption("CARLA Simulation")
         pygame.display.set_caption("Test 123")
+
+        ## Setup shared memory
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
+                                          image_width=self.camera_width,
+                                          image_height=self.camera_height,
+                                          max_lidar_points=self.max_lidar_points)
+
+        self.hud = MinimalHUD(self.hud_width, self.hud_height, shared_memory=self.shared_memory,
+                              pyro_state_server=self.pyro_state_server)
 
         # Test connection and get observation dimension
         logger.info("Checking remote connection...")

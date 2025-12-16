@@ -1,19 +1,9 @@
-THIS_IS_NOT_VALID_PYTHON
-
 import logging
-import math
 import random
 import sys
-import threading
 import time
 
-import Pyro4
 import carla
-import cv2
-import numpy as np
-import pygame
-from stable_baselines3 import TD3
-from ultralytics import YOLO
 from opentelemetry import trace, metrics
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -25,58 +15,14 @@ from opentelemetry.sdk.metrics._internal.export import PeriodicExportingMetricRe
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Status, StatusCode
+from stable_baselines3 import TD3
+from ultralytics import YOLO
 
 from RL.carla_remote_env import RemoteCarlaEnv
-from agents.navigation.basic_agent import BasicAgent
 from agents.tools.misc import compute_distance, get_speed
-from simulation.python_3_8_20_scripts.camera_control import CameraManager, LiDARManager
-from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
 from visualization.MinimalHUD import MinimalHUD
 
 print("CARLA loaded from:", carla.__file__)
-import os, sys, time
-
-print("\n" + "="*80)
-print("BRANCH PROOF: THIS FILE IS EXECUTING")
-print("FILE:", os.path.abspath(__file__))
-print("CWD :", os.getcwd())
-print("PY  :", sys.executable)
-print("TIME:", time.strftime("%Y-%m-%d %H:%M:%S"))
-print("="*80 + "\n")
-sys.stdout.flush()
-
-# ==============================================================================
-# -- Remote Objects --------------------------------------------------------------
-# ==============================================================================
-@Pyro4.expose
-class PyroStateServer:
-    def __init__(self):
-        self.lock = threading.Lock()
-
-        # -----
-        # Specific Communication
-
-        # Lidar:
-        self.latest_lidar_result = {}
-
-    # -----
-    # LiDAR Specific Communication
-    def update_lidar_result(self, bboxes: np.ndarray, labels: np.ndarray, scores: np.ndarray):
-        """
-        Called by the inference loop to save new results
-        """
-        with self.lock:
-            # Convert numpy/tensor to standard python lists for serialization
-            self.latest_lidar_result = {
-                "bboxes": bboxes.tolist() if isinstance(bboxes, np.ndarray) else bboxes,
-                "labels": labels.tolist() if isinstance(labels, np.ndarray) else labels,
-                "scores": scores.tolist() if isinstance(scores, np.ndarray) else scores
-            }
-
-    def get_latest_lidar_result(self):
-        with self.lock:
-            return self.latest_lidar_result.copy()
 
 # ==============================================================================
 # -- Telemetry --------------------------------------------------------------
@@ -364,7 +310,8 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
 
 if __name__ == '__main__':
     env = RemoteCarlaEnv()
-    rl_model_path = "./RL/Model_TD3/td3_carla_500000"
+    rl_model_path = ".RL/Model_TD3/td3_carla_5000000"
+    # rl_model_path = "./RL/Model_TD3/td3_carla_500000"
     obdt_model_path = "./Machine_Vision/runs/Train8/best.pt"
     start = time.time()
     main(env, rl_model_path, obdt_model_path)
