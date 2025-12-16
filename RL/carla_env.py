@@ -492,7 +492,7 @@ class CarlaEnv(gym.Env):
 
         return np.array(obs, dtype=np.float32)
 
-    def _compute_reward(self, obs: np.ndarray) -> tuple:
+    def _compute_reward(self, obs: np.array) -> tuple:
         """
         Computes the reward for the current state.
         - Penalizes collisions heavily.
