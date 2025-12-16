@@ -40,17 +40,6 @@ class MinimalHUD:
             camera_surf = pygame.surfarray.make_surface(frame_rgb.transpose(1, 0, 2))
             display.blit(camera_surf, (0, 0))
 
-        t = time.time()
-        pulse = int(128 + 127 * math.sin(t * 6.0))  # 0..255 pulsing
-        banner = pygame.Surface((520, 55), pygame.SRCALPHA)
-        banner.fill((255, 0, 255, 140))  # magenta translucent
-        display.blit(banner, (10, 10))
-
-        txt = self.font.render(f"RUNNING BRANCH HUD  |  t={t:.3f}", True, (0, 0, 0))
-        display.blit(txt, (20, 25))
-
-        pygame.draw.circle(display, (pulse, 255 - pulse, 255), (500, 37), 10)
-
         # 2. ----- LiDAR Points (Top-Right)
         # Draw new points onto the persistent fading surface
         lidar_points = self.shared_memory.read_latest_lidar_points()

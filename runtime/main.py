@@ -278,16 +278,33 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                             break
 
                         #### Take a step in the environment
+                        start = time.time()
                         action, _ = model.predict(obs, deterministic=True)
+                        end = time.time()
+                        print("RL model prediction time: "+ str(end-start)+"s")
+                        start = time.time()
                         obs, reward, terminated, truncated, info = env.step(action)
+                        end = time.time()
+                        print("RL model step time: "+ str(end-start)+"s")
                         ep_reward += reward
                         yolo_dets = []
+                        start = time.time()
                         latest_image, _ = env.get_latest_image()
+                        end = time.time()
+                        print("Get latest image: "+ str(end-start)+"s")
+                        start = time.time()
+                        latest_lidar_cloud = env.get_latest_lidar_points()
+                        end = time.time()
+                        print("Get latest lidar cloud: "+ str(end-start)+"s")
                         if latest_image     is not None:
+                            start = time.time()
                             obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.1)
+                            end = time.time()
+                            print("Object detection time: "+ str(end-start)+"s")
                             obdt_result = obdt_results[0]
 
                             # r.boxes.xyxy, r.boxes.conf, r.boxes.cls
+
                             for i in range(len(obdt_result.boxes)):
                                 x1, y1, x2, y2 = obdt_result.boxes.xyxy[i].cpu().numpy()
                                 conf = float(obdt_result.boxes.conf[i].cpu().numpy())
@@ -296,9 +313,12 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                                                                                             "names") else str(cls)
                                 yolo_dets.append((x1, y1, x2, y2, name, conf))
 
+                        start = time.time()
                         env.hud_logic(
                             yolo_detections=yolo_dets
                         )
+                        end = time.time()
+                        print("HUD logic time: "+ str(end-start)+"s")
 
                 env.reset()
                 terminated = False
@@ -310,8 +330,8 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
 
 if __name__ == '__main__':
     env = RemoteCarlaEnv()
-    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_3map_traffic_agent"
-    # rl_model_path = "./RL/Model_TD3/td3_carla_500000"
+    # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_3map_traffic_agent"
+    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_carla_500000"
     obdt_model_path = "/home/shared/3_12_jupyter/bin/Machine_Vision/runs/best_model/best.pt"
     start = time.time()
     main(env, rl_model_path, obdt_model_path)
