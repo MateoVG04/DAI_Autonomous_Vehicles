@@ -11,7 +11,6 @@ from typing import List
 # ==============================================================================
 # -- Shared Memory Classes -----------------------------------------------------
 # ==============================================================================
-
 class SharedMemoryArray:
     def __init__(self, data_shape: List[int], reserved_count: int, datatype) -> None:
         self.data_shape = data_shape
@@ -35,9 +34,7 @@ class SharedMemoryManager:
         self.data_arrays = data_arrays
 
         path = Path(filename)
-        self.init_file(path)
-
-        # Open in Read-Write mode (r+)
+        # Open in Read-Write (r+) mode
         self._mm = np.memmap(filename, dtype=np.uint8, mode="r+", shape=(self.total_size,))
         self._write_index_mm = np.ndarray(len(self.data_arrays), dtype=np.uint8,
                                           buffer=self._mm[:self.write_array.reserved_size])
@@ -56,7 +53,7 @@ class SharedMemoryManager:
     def __del__(self):
         try:
             del self._mm
-        except AttributeError:
+        except:
             pass
 
     def init_file(self, filepath: Path):
@@ -80,93 +77,72 @@ class CarlaWrapper:
 
     def __init__(self, filename, image_width: int, image_height: int):
         data_arrays = [
-            SharedMemoryArray(data_shape=[image_height, image_width, 3],
-                              reserved_count=100, datatype=np.uint8),
-            SharedMemoryArray(data_shape=[image_height, image_width, 3],
-                              reserved_count=100, datatype=np.uint8),
-            SharedMemoryArray(data_shape=[33],
-                              reserved_count=100, datatype=np.float64),
+            SharedMemoryArray(data_shape=[image_height, image_width, 3], reserved_count=100, datatype=np.uint8),
+            SharedMemoryArray(data_shape=[image_height, image_width, 3], reserved_count=100, datatype=np.uint8),
+            SharedMemoryArray(data_shape=[33], reserved_count=100, datatype=np.float64),
         ]
         self.shared_memory = SharedMemoryManager(filename=filename, data_arrays=data_arrays)
 
-    # --- Read Image (Slot 0) ---
     @property
     def latest_image_index(self) -> int:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)
 
     def read_latest_image(self) -> np.ndarray:
         slot_index = self.latest_image_index - 1
-        if slot_index == -1:
-            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.images.value].reserved_count - 1
-        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.images.value, slot_index=slot_index)
+        if slot_index == -1: slot_index = 99
+        return self.shared_memory.read_data(self.CarlaDataType.images.value, slot_index)
 
-    # --- Read Object/Lidar (Slot 1) ---
     @property
     def object_detected_index(self) -> int:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.object_detected.value)
 
     def read_latest_object_detected(self) -> np.ndarray:
         slot_index = self.object_detected_index - 1
-        if slot_index == -1:
-            slot_index = self.shared_memory.data_arrays[self.CarlaDataType.object_detected.value].reserved_count - 1
-        return self.shared_memory.read_data(shared_array_index=self.CarlaDataType.object_detected.value,
-                                            slot_index=slot_index)
+        if slot_index == -1: slot_index = 99
+        return self.shared_memory.read_data(self.CarlaDataType.object_detected.value, slot_index)
 
 
 # ==============================================================================
-# -- Viewer Logic --------------------------------------------------------------
+# -- Viewer --------------------------------------------------------------------
 # ==============================================================================
-
 def main():
     print("Initializing Viewer...")
+    width, height = 800, 600
 
-    width = 800
-    height = 600
+    shm_camera = "/dev/shm/carla_shared_Rune.dat"
+    shm_lidar = "/dev/shm/carla_shared_Rune_Lidar.dat"
 
-    # 1. Define Paths
-    shm_camera_path = "/dev/shm/carla_shared_Rune.dat"
-    shm_lidar_path = "/dev/shm/carla_shared_Rune_Lidar.dat"
-
-    # 2. Wait for Files
-    while not os.path.exists(shm_camera_path) or not os.path.exists(shm_lidar_path):
-        print("Waiting for simulation to create shared memory files...")
+    while not os.path.exists(shm_camera) or not os.path.exists(shm_lidar):
+        print("Waiting for simulation memory...")
         time.sleep(1)
 
-    # 3. Initialize Wrappers
-    print("Connecting to Camera Memory...")
-    camera_wrapper = CarlaWrapper(filename=shm_camera_path, image_width=width, image_height=height)
+    cam_wrapper = CarlaWrapper(shm_camera, width, height)
+    lid_wrapper = CarlaWrapper(shm_lidar, width, height)
 
-    print("Connecting to Lidar Memory...")
-    lidar_wrapper = CarlaWrapper(filename=shm_lidar_path, image_width=width, image_height=height)
-
-    print("Viewer Running. Press 'q' to exit.")
+    print("Running. Press 'q' to exit.")
 
     while True:
         try:
-            # --- Read Camera (RGB) ---
-            rgb_img = camera_wrapper.read_latest_image()
-            rgb_img = np.ascontiguousarray(rgb_img, dtype=np.uint8)
-            # Convert RGB to BGR for OpenCV display
-            bgr_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
+            # 1. Read Camera
+            # The simulation now writes BGR. OpenCV expects BGR. No conversion needed.
+            img_bgr = cam_wrapper.read_latest_image()
+            img_bgr = np.ascontiguousarray(img_bgr, dtype=np.uint8)
 
-            # --- Read Lidar (BEV) ---
-            lidar_img = lidar_wrapper.read_latest_object_detected()
-            lidar_img = np.ascontiguousarray(lidar_img, dtype=np.uint8)
+            # 2. Read Lidar
+            img_lidar = lid_wrapper.read_latest_object_detected()
+            img_lidar = np.ascontiguousarray(img_lidar, dtype=np.uint8)
 
-            # Draw Ego Arrow on Lidar
+            # Marker
             cx, cy = width // 2, height // 2
-            cv2.arrowedLine(lidar_img, (cx, cy + 10), (cx, cy - 20), (0, 0, 255), 2)
+            cv2.arrowedLine(img_lidar, (cx, cy + 10), (cx, cy - 20), (0, 0, 255), 2)
 
-            # --- Display ---
-            cv2.imshow("RGB Camera", bgr_img)
-            cv2.imshow("Lidar BEV", lidar_img)
+            cv2.imshow("RGB Camera", img_bgr)
+            cv2.imshow("Lidar BEV", img_lidar)
 
-        except Exception as e:
-            # pass on read errors (sync issues)
+        except Exception:
             pass
 
-        if cv2.waitKey(20) & 0xFF == ord('q'):
-            break
+        if cv2.waitKey(20) & 0xFF == ord('q'): break
 
     cv2.destroyAllWindows()
 
