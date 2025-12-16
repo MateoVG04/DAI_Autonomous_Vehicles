@@ -5,8 +5,11 @@ import logging
 import time
 import serpent
 import threading
+import pygame
 
 from runtime.main import PyroStateServer
+from runtime.pointpillars_lightweight.run.inference import CarlaWrapper
+from visualization.MinimalHUD import MinimalHUD
 
 """
 Carla Remote Environment accessed via Pyro4.
@@ -33,6 +36,9 @@ class RemoteCarlaEnv(gym.Env):
     """
     def __init__(self):
         super().__init__()
+        self.camera_width = 800
+        self.camera_height = 600
+        self.max_lidar_points = 120000
 
         # Establish Pyro4 connection to remote Carla environment
         self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
@@ -44,6 +50,26 @@ class RemoteCarlaEnv(gym.Env):
                                        args=(logger, self.pyro_state_server, self.pyro_name, self.pyro_port), daemon=True)
         self.pyro_thread.start()
 
+        ## Setup shared memory
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
+                                          image_width=self.camera_width,
+                                          image_height=self.camera_height,
+                                          max_lidar_points=self.max_lidar_points)
+
+        self.hud_width = self.camera_width * 2  # double width for camera + LiDAR
+        self.hud_height = self.camera_height * 2
+        self.hud = MinimalHUD(self.hud_width, self.hud_height, shared_memory=self.shared_memory,
+                              pyro_state_server=self.pyro_state_server)
+
+        # Pygame
+        pygame.init()
+        pygame.font.init()
+        self.display = pygame.display.set_mode(
+            (self.hud_width, self.hud_height),
+            pygame.HWSURFACE | pygame.DOUBLEBUF
+        )
+        pygame.display.set_caption("CARLA Simulation")
         # Test connection and get observation dimension
         logger.info("Checking remote connection...")
         try:
@@ -56,6 +82,11 @@ class RemoteCarlaEnv(gym.Env):
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
+
+    def hud_logic(self):
+        self.hud.tick()
+        self.hud.render(self.display, vehicle=self.remote_env.ego_vehicle, distance_to_dest=float(self.remote_env.info.get("dist_to_goal", 0.0)))
+        pygame.display.flip()
 
     def connect(self):
         """Attempts to connect to the server, retrying indefinitely."""
