@@ -386,7 +386,7 @@ def setup_vehicle(world):
 
     # Get a random blueprint.
     blueprint_library = world.get_blueprint_library()
-    blueprint = random.choice(blueprint_library.filter('vehicle.*'))
+    blueprint = blueprint_library.find('vehicle.tesla.model3')
     blueprint.set_attribute('role_name', 'hero')
     if blueprint.has_attribute('color'):
         color = random.choice(blueprint.get_attribute('color').recommended_values)

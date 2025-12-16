@@ -318,6 +318,28 @@ class MinimalHUD:
 # ==============================================================================
 # -- setup methods --------------------------------------------------------------
 # ==============================================================================
+def clear_all_vehicles(client, world, logger):
+    """
+    Destroys all vehicles currently in the simulation to ensure a clean slate.
+    """
+    logger.info("Clearing all existing vehicles...")
+    actor_list = world.get_actors()
+    vehicle_list = actor_list.filter('vehicle.*')
+
+    if not vehicle_list:
+        logger.info("No vehicles found to clear.")
+        return
+
+    batch = [carla.command.DestroyActor(x) for x in vehicle_list]
+    responses = client.apply_batch_sync(batch, True)
+
+    # Optional: Check for errors
+    errors = sum(1 for r in responses if r.error)
+    if errors:
+        logger.warning(f"{errors} errors occurred while clearing vehicles.")
+    else:
+        logger.info(f"Cleared {len(vehicle_list)} vehicles.")
+
 def setup_carla(logger, client: carla):
     server_version = client.get_server_version()
     client_version = client.get_client_version()
@@ -383,6 +405,16 @@ def spawn_traffic(client, world, amount=60):
     # 2. Get Blueprints
     blueprints = world.get_blueprint_library().filter("vehicle.*")
     blueprints = [x for x in blueprints if int(x.get_attribute('number_of_wheels')) == 4]
+    # Filter out Heavy vehicles and Bikes (Strict car filter)
+    # We check the Blueprint ID for keywords indicating non-cars
+    forbidden_keywords = ['truck', 'van', 'bus', 'sprinter', 'firetruck', 'ambulance', 'carlamotors']
+    cars_only = []
+    for bp in blueprints:
+        bp_id = bp.id.lower()
+        if not any(keyword in bp_id for keyword in forbidden_keywords):
+            cars_only.append(bp)
+    blueprints = cars_only
+    logger.info(f"Blueprint library filtered to {len(blueprints)} car types (excluding trucks/vans).")
 
     # 3. Get Spawn Points
     spawn_points = world.get_map().get_spawn_points()
@@ -456,6 +488,8 @@ def main():
     # -----
     logger.info("Setting up carla")
     world = carla_client.get_world()
+    clear_all_vehicles(carla_client, world, logger)
+
     vehicle = setup_vehicle(world=world)
 
     # 1. Camera
@@ -471,7 +505,7 @@ def main():
     # 2. LiDAR
     lidar_bp = world.get_blueprint_library().find('sensor.lidar.ray_cast')
     lidar_bp.set_attribute('channels', '64')
-    lidar_bp.set_attribute('points_per_second', '100000')
+    lidar_bp.set_attribute('points_per_second', '1300000')
     lidar_bp.set_attribute('rotation_frequency', '10')  # 10Hz to match standard sim tick
     lidar_bp.set_attribute('range', '50')
     lidar_transform = carla.Transform(carla.Location(x=0.0, z=1.7))
@@ -507,7 +541,7 @@ def main():
     logger.info("Starting simulation")
     set_random_destination(world, agent)   # fixme, required when running in no-controller mode
     try:
-        while not end_simulation:
+        while simstep < 300000:
             # Performing full run
             while not agent.done():
                 # 1. Tick the world
@@ -523,8 +557,9 @@ def main():
                     continue
 
                 # 3. Save Data (Every X frames if you want to reduce size, currently every frame)
-                all_actors = world.get_actors(npc_ids)  # Pass NPCs for label generation
-                kitti_gen.save_frame(current_image, current_lidar, vehicle, all_actors)
+                if simstep % 3 == 0:
+                    all_actors = world.get_actors(npc_ids)  # Pass NPCs for label generation
+                    kitti_gen.save_frame(current_image, current_lidar, vehicle, all_actors)
 
                 # ... (Keep your HUD, Agent Control, and Pygame logic) ...
                 if MinimalHUD.handle_pygame_events():
@@ -547,6 +582,7 @@ def main():
                     camera_k=kitti_gen.intrinsic  # Pass the K matrix
                 )
                 pygame.display.flip()
+                simstep += 1
 
             set_random_destination(world, agent)
             logger.info("Destination reached")

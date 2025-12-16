@@ -70,12 +70,12 @@ services:
     # We mirror your existing setup but bump the size slightly to be safe.
     shm_size: 4gb
     volumes:
-      - ./pointpillars_lightweight/carla_kitti:/workspace/carla_kitti
+      - /mnt/data/kitti_carla:/workspace/carla_kitti
       - ./pointpillars_lightweight/run:/workspace/run
       - ./pointpillars_lightweight/PointPillars/pillar_logs:/workspace/PointPillars/pillar_logs
       - ./pointpillars_lightweight/PointPillars/pointpillars/dataset:/workspace/PointPillars/pointpillars/dataset
       - /dev/shm:/dev/shm
-    command: python3 run/inference.py
+    command: run/training_script.sh
     # for PyTorch 3D data processing to avoid "OS Error: Bus error"
     ulimits:
       memlock: -1

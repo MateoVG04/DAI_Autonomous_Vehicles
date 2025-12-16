@@ -174,7 +174,7 @@ class Kitti(Dataset):
         return data_dict
 
     def __len__(self):
-        return len(self.data_infos)
+        return len(self.sorted_ids)
  
 
 if __name__ == '__main__':

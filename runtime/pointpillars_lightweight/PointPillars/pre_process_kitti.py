@@ -54,6 +54,10 @@ def create_data_info_pkl(data_root, data_type, prefix, label=True, db=False):
         cur_info_dict['velodyne_path'] = sep.join(lidar_path.split(sep)[-3:])
 
         img = cv2.imread(img_path)
+        if img is None:
+            print(f"Warning: Could not read image {img_path}. Skipping.")
+            continue
+
         image_shape = img.shape[:2]
         cur_info_dict['image'] = {
             'image_shape': image_shape,
@@ -146,7 +150,7 @@ def main(args):
     write_pickle(kitti_trainval_infos_dict, saved_path)
 
     ## 4. test: create data infomation pkl file && create reduced point clouds
-    kitti_test_infos_dict = create_data_info_pkl(data_root, 'test', prefix, label=False)
+    # kitti_test_infos_dict = create_data_info_pkl(data_root, 'test', prefix, label=False)
 
 
 if __name__ == '__main__':
