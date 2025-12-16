@@ -451,7 +451,7 @@ class PointPillarsML:
 
 if __name__ == "__main__":
     logger = logging.getLogger(__name__)
-    ml_engine = PointPillarsML(ckpt_path="/workspace/PointPillars/pretrained/epoch_160.pth") # This could be env variable
+    ml_engine = PointPillarsML(ckpt_path="/workspace/PointPillars/pillar_logs/checkpoints/epoch_160.pth") # This could be env variable
     logger.info(f"${ml_engine.__class__} class instantiated")
 
     camera_width = 800

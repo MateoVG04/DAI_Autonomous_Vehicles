@@ -1,12 +1,11 @@
 import logging
-import time
 
 from ultralytics import YOLO
 import cv2
 
 from enum import IntEnum
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List
 
 import numpy as np
 import os
@@ -310,7 +309,7 @@ class CarlaWrapper:
         return
 
 class ObjectTrackingML:
-    def __init__(self, model_path='yolov8n.pt', conf_thresholds: Optional[Dict[float]] = None):
+    def __init__(self, model_path='yolov8n.pt', conf_thresholds = None):
         """
         :param model_path: Path to YOLO model (downloads automatically if missing)
         """

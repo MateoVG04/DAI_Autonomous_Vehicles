@@ -5,6 +5,7 @@ numba
 opencv-python
 tensorboard
 tqdm
+wandb
 
 # NVIDIA packages
 --extra-index-url https://pypi.ngc.nvidia.com

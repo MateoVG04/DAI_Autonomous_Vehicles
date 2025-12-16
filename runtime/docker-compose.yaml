@@ -25,39 +25,11 @@ services:
               count: all
               capabilities: [gpu]
 
-  openpcdet:
-    build:
-      context: ./openpcdet
-      dockerfile: Dockerfile
-    image: openpcdet_image
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - CUDA_LAUNCH_BLOCKING=1
-      - PYTHONUNBUFFERED=1
-    working_dir: /workspace
-    volumes:
-      # Your local inference script
-      - ./openpcdet/run:/workspace/run
-      - ./openpcdet/checkpoints:/workspace/checkpoints
-      # Mount host /dev/shm to container /dev/shm
-      - /dev/shm:/dev/shm
-    command: python3 inference.py
-    stdin_open: true
-    tty: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-# I found online that OpenPCDet is better for Lidar so trying that first
-#  mmdet3d:
+#  openpcdet:
 #    build:
-#      context: ./mmdetection3d
+#      context: ./openpcdet
 #      dockerfile: Dockerfile
-#    image: mmdet3d_light
+#    image: openpcdet_image
 #    environment:
 #      - NVIDIA_VISIBLE_DEVICES=all
 #      - CUDA_LAUNCH_BLOCKING=1
@@ -65,8 +37,8 @@ services:
 #    working_dir: /workspace
 #    volumes:
 #      # Your local inference script
-#      - ./inference.py:/workspace/inference.py
-#      - ./checkpoints:/workspace/checkpoints
+#      - ./openpcdet/run:/workspace/run
+#      - ./openpcdet/checkpoints:/workspace/checkpoints
 #      # Mount host /dev/shm to container /dev/shm
 #      - /dev/shm:/dev/shm
 #    command: python3 inference.py
@@ -98,7 +70,10 @@ services:
     # We mirror your existing setup but bump the size slightly to be safe.
     shm_size: 4gb
     volumes:
+      - ./pointpillars_lightweight/carla_kitti:/workspace/carla_kitti
       - ./pointpillars_lightweight/run:/workspace/run
+      - ./pointpillars_lightweight/PointPillars/pillar_logs:/workspace/PointPillars/pillar_logs
+      - ./pointpillars_lightweight/PointPillars/pointpillars/dataset:/workspace/PointPillars/pointpillars/dataset
       - /dev/shm:/dev/shm
     command: python3 run/inference.py
     # for PyTorch 3D data processing to avoid "OS Error: Bus error"
