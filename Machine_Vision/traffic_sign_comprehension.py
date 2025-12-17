@@ -187,7 +187,7 @@ class TrafficSignCNN(pl.LightningModule):
 
         # 4) Map predicted index to class label
         speed = self.class_names[pred_idx]
-        if confidence < 0.2:
+        if confidence < 0.4:
             speed = None
         return speed
 

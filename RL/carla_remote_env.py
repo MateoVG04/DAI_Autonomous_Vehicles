@@ -50,7 +50,8 @@ class RemoteCarlaEnv(gym.Env):
         self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
         # Pyro
         self.pyro_name = "pyrostateserver"
-        self.pyro_port = random.randint(9100, 9200)
+        # self.pyro_port = random.randint(9100, 9200)
+        self.pyro_port = 9000
         self.pyro_state_server = PyroStateServer()
         self.pyro_thread = threading.Thread(target=start_pyro_daemon,
                                        args=(logger, self.pyro_state_server, self.pyro_name, self.pyro_port), daemon=True)

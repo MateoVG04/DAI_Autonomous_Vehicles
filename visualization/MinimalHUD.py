@@ -59,8 +59,8 @@ class MinimalHUD:
         bboxes = lidar_result.get('bboxes', [])
 
         # We draw boxes on a fresh transparent surface to avoid "smearing"
-        if bboxes and len(bboxes) > 0:
-            self._draw_bboxes_overlay(display, bboxes, offset=(self.quad_w, 0))
+        # if bboxes and len(bboxes) > 0:
+        #     self._draw_bboxes_overlay(display, bboxes, offset=(self.quad_w, 0))
 
         # 4. ----- Chase camera (Bottom-Left)
         chase_frame = self.shared_memory.read_latest_chase_image()
@@ -109,7 +109,7 @@ class MinimalHUD:
             f"Distance: {distance:7.1f} m",
             f"FPS: {self.fps:5.1f}",
             f"Lidar detected: {detected_count} objects",
-            f"Last seen speed: {self.last_seen_speed_sign or "not yet"}",
+            f"Last seen traffic sign: {self.last_seen_speed_sign}",
         ]
 
         # Semi-transparent background box

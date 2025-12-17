@@ -116,8 +116,8 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = None
         self._init_world_settings()
         self._init_traffic_manager()
-        self._load_map("Town02_Opt") # Start on first map
-        self.client.get_world().set_weather(carla.WeatherParameters.ClearNoon)
+        self._load_map("Town01_Opt") # Start on first map
+        self.client.get_world().set_weather(carla.WeatherParameters.CloudyNoon)
 
         logger.info("Carla environment initialized")
 
@@ -716,6 +716,8 @@ class CarlaEnv(gym.Env):
                 color=carla.Color(255, 255, 255),  # White text
                 life_time=0.05  # Update every frame (assuming 20fps)
             )
+
+    @Pyro4.expose
     def get_latest_image(self):
         frame = self.shared_memory.read_latest_image()
         if frame is None:
