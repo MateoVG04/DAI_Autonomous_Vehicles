@@ -323,7 +323,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                                 name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
                                                                                             "names") else str(cls)
                                 yolo_dets.append((x1, y1, x2, y2, name, conf))
-                        if latest_image     is not None and latest_lidar_cloud is not None:
+                        if latest_image is not None and latest_lidar_cloud is not None:
                             start = time.time()
                             distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
                             end = time.time()
