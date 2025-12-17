@@ -22,7 +22,6 @@ logger.addHandler(stream_handler)
 # Constants
 MAX_STEPS = 1500
 WAIT_TICKS = 30
-SPAWN_VEHICLES = 30
 MAP_CHANGE_FREQ = 25
 
 @Pyro4.expose
@@ -135,6 +134,7 @@ class CarlaEnv(gym.Env):
         self.tm.set_global_distance_to_leading_vehicle(3)
 
     def _load_map(self, map_name: str):
+        SPAWN_VEHICLES = 15
         logger.info(f"Loading map: {map_name}")
         self._cleanup()
         self.client.load_world(map_name)
@@ -143,6 +143,7 @@ class CarlaEnv(gym.Env):
         self._spawn_ego_vehicle()
         self._spawn_traffic(SPAWN_VEHICLES)
         self.world.tick()
+
 
     def _spawn_ego_vehicle(self):
 
@@ -407,10 +408,13 @@ class CarlaEnv(gym.Env):
             waypoints, _ = self.get_waypoints()
             obs = self._get_obs(waypoints)
 
+            self.safety_brake = 0
+
             return obs.tolist(), {}
         except Exception as e:
             logger.exception("Step Error")
             raise e
+
 
     def step(self, action: list) -> tuple:
         """
@@ -444,6 +448,17 @@ class CarlaEnv(gym.Env):
             lp_control = self.lp.run_step()
             steer = lp_control.steer
 
+            # Emergency braking
+            speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+
+            max_decel = 5.0  # m/s² (comfortable emergency braking)
+            stopping_dist = speed ** 2 / (2 * max_decel)
+
+            if self.distance_ahead < stopping_dist + 2.0:
+                throttle = 0.0
+                brake = 1.0
+                self.safety_brake = 1
+
             control = carla.VehicleControl(throttle=throttle, brake=brake, steer=steer)
             self.ego_vehicle.apply_control(control)
 
@@ -465,7 +480,7 @@ class CarlaEnv(gym.Env):
 
             # 6. OBSERVATION & REWARD
             obs = self._get_obs(waypoints)
-            reward, terminated = self._compute_reward(waypoints)
+            reward, terminated = self._compute_reward(obs)
             truncated = self.episode_step >= MAX_STEPS
 
             self._render_hud(reward)
@@ -493,7 +508,7 @@ class CarlaEnv(gym.Env):
 
         return np.array(obs, dtype=np.float32)
 
-    def _compute_reward(self, waypoints: list) -> tuple:
+    def _compute_reward(self, obs: np.array) -> tuple:
         """
         Computes the reward for the current state.
         - Penalizes collisions heavily.
@@ -503,121 +518,116 @@ class CarlaEnv(gym.Env):
         - Penalize stopping unless in traffic.
         - Rewards reaching the goal.
         -> finally normalize reward
-        :param waypoints: The next waypoints from the Local Planner
         :return: Tuple of (reward: float, terminated: bool)
         """
+
+        # -------------------
+        # 1. Collision
+        # -------------------
+        # if collision happened after initial wait period -> big mistake -> wrap it up
+        if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
+            return -200.0, True
+
+        # --------------------------------------------------
+        # 2. speed, speed limit, safe distance, distance ahead
+        # --------------------------------------------------
+        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+        speed_limit = self.ego_vehicle.get_speed_limit() / 3.6
+
+        # safe distance = max(10m, 2 s * speed)
+        safe_dist = max(10.0, speed * 2.0)
+        dist_to_lead = self.distance_ahead
+
+        car_ahead = dist_to_lead < safe_dist
+        road_clear = dist_to_lead > 45.0
+
+        # example
+        # speed = 30 km/h = 8 m/s
+        # safe_dist = 8*2 = 16 m
+        # distance ahead = 15 m
+        # is_blocked = True
+
         reward = 0.0
         terminated = False
 
-        # -----------------------------------------------------------
-        # 1. SAFETY: Immediate Collision Termination
-        # -----------------------------------------------------------
-        if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
-            # Massive penalty to ensure collisions are the "worst case"
-            return -100.0, True
+        # --------------------------------------------------
+        # 3. Target Speed & reward
+        # --------------------------------------------------
+        if car_ahead:
+            # Linearly scale target speed based on distance to lead vehicle
+            # Ratio keeps decreasing -> deceleration
+            follow_ratio = np.clip(dist_to_lead / safe_dist, 0.0, 1.0)
+            target_speed = follow_ratio * speed_limit
 
-        # -----------------------------------------------------------
-        # 2. INPUTS: Gather Data
-        # -----------------------------------------------------------
-        speed, accel = get_vehicle_speed_accel(self.ego_vehicle)  # m/s
+            # if very close, force full stop
+            if dist_to_lead < 10:
+                target_speed = 0.0
 
-        # Speed Limit (Dynamic)
-        speed_limit = self.ego_vehicle.get_speed_limit() / 3.6
-        speed_limit = max(5.0, speed_limit)  # Floor at 5 m/s
-
-        # Distance Logic
-        # Safety Bubble: We want a 2-second gap, but never less than 6 meters.
-        safe_dist = max(6.0, speed * 2.0)
-        dist_to_lead = self.distance_ahead
-
-        # Mode Selection
-        # We are "Blocked" if a car is inside our safety bubble
-        is_blocked = dist_to_lead < safe_dist
-
-        # -----------------------------------------------------------
-        # 3. DUAL-MODE TARGET SPEED
-        # -----------------------------------------------------------
-        if is_blocked:
-            # MODE A: TRAFFIC / STOPPING
-            # If the lead car is stopped, we want to stop (Target = 0).
-            # If lead car is moving, we roughly match their speed (approximated by 0 for safety).
-            target_speed = 0.0
-
-            # --- CRITICAL: The "Stop Safely" Reward ---
-            # If we are blocked, we reward the agent for being slow/stopped.
-            # This makes the agent "happy" to wait behind a car.
-
-            # Additional penalty if we get CRITICALLY close (< 4m) to prevent bumper-touching
+            # if too close, big penalty
             if dist_to_lead < 5.0:
-                reward -= 10.0 * (5.0 - dist_to_lead)  # Push back hard
+                reward -= 5.0 * (4.0 - dist_to_lead)
 
         else:
-            # MODE B: CLEAR ROAD
+            # else just go the speed limit
             target_speed = speed_limit
 
-            # --- CRITICAL: The "Go Fast" Penalty ---
-            # If the road is clear, we punish SLOW driving.
-            # If speed is less than 80% of limit, apply penalty.
-            if speed < (speed_limit * 0.8):
-                reward -= 3.0
-
-        # -----------------------------------------------------------
-        # 4. UNIVERSAL SPEED REWARD (Gaussian)
-        # -----------------------------------------------------------
-        # This works for both modes:
-        # - In Mode A, it rewards slowing down to 0.
-        # - In Mode B, it rewards speeding up to Limit.
-        speed_diff = abs(speed - target_speed)
-        r_speed = np.exp(-0.25 * speed_diff ** 2)
+        # reward based on speed error
+        speed_error = (speed - target_speed) / max(speed_limit, 1e-3)
+        if speed <= target_speed:
+            # reward underspeeding linearly
+            r_speed = 1.0 - abs(speed_error)
+        else:
+            # penalize overspeeding harshly
+            r_speed = -3.0 * speed_error ** 2
         reward += r_speed
 
-        # -----------------------------------------------------------
-        # 5. PROGRESS BIAS (Only when clear)
-        # -----------------------------------------------------------
-        # We only give the "forward motion" bonus if we are NOT blocked.
-        # This prevents the "Traffic Jam Lover" bug where the agent wants to
-        # creep forward into a stopped car.
-        if not is_blocked:
-            if speed > 5.0:
-                reward += 0.5
-            else:
-                reward -= 2.0
 
+        # --------------------------------------------------
+        # 5. Progress reward
+        # --------------------------------------------------
+        # if no car ahead, reward progress towards goal
+        if not car_ahead:
+            reward += 0.5 * (speed / speed_limit)
 
-        # -----------------------------------------------------------
-        # 6. STANDARD SHAPING (Lane & Comfort)
-        # -----------------------------------------------------------
-        # Lane Centering
-        if waypoints:
-            dist_center = waypoints[0].transform.location.distance(self.ego_vehicle.get_location())
-            reward -= 0.5 * dist_center  # Keep strict
-        else:
-            reward -= 1.0
+        # --------------------------------------------------
+        # 6. Penalties (Stop, Lane, G-Force)
+        # --------------------------------------------------
+        # Lazy Stop
+        # if speed is less than half of the speed limit and road is clear, penalize
+        if speed < 0.5 * speed_limit and road_clear:
+            reward -= 2.0
 
-        # Comfort: Penalize high G-forces
+        # Lane
+        cte = obs[-2] * self.lane_width  # denormalize
+        reward -= 0.4 * (cte ** 2)
+
+        # Comfort
         accel = self.ego_vehicle.get_acceleration()
         tf = self.ego_vehicle.get_transform()
 
-        long_g = abs(accel.dot(tf.get_forward_vector())) / 9.81
-        lat_g = abs(accel.dot(tf.get_right_vector())) / 9.81
+        # Project vectors
+        fwd = tf.get_forward_vector()
+        right = tf.get_right_vector()
 
-        reward -= 1.5 * lat_g
-        reward -= 0.5 * max(0.0, long_g - 0.5)
+        long_g = abs(accel.x * fwd.x + accel.y * fwd.y + accel.z * fwd.z) / 9.81
+        lat_g = abs(accel.x * right.x + accel.y * right.y + accel.z * right.z) / 9.81
+
+        reward -= 0.5 * lat_g
+        reward -= 0.2 * max(0.0, long_g - 0.5)
 
         # --------------------------------------------------
-        # 8. Final normalization
+        # 7. Clipping
         # --------------------------------------------------
-        reward = np.clip(reward, -5.0, 5.0)
+        reward = np.clip(reward, -3.0, 3.0)
 
-        # -----------------------------------------------------------
-        # 7. GOAL & TERMINATION
-        # -----------------------------------------------------------
+        # --------------------------------------------------
+        # 8. Goal
+        # --------------------------------------------------
         if self.lp.done():
             reward += 50.0
             terminated = True
 
         return reward, terminated
-
 
     def _cleanup(self):
         """Destroys current actors cleanly."""
@@ -680,7 +690,7 @@ class CarlaEnv(gym.Env):
             f"speed_limit: {self.ego_vehicle.get_speed_limit():.1f} km/h",
             f"Steer: {ctrl.steer:.2f}",
             f"Throttle: {ctrl.throttle:.2f} | Brake: {ctrl.brake:.2f}",
-            f"GForce: {gforce:.2f} g",
+            f"GForce: {gforce:.2f} g | safety brake: {self.safety_brake:.2f}",
             f"distAhead: {self.distance_ahead:.2f} m",
             f"Reward: {reward:.2f}",
             f"Episode: {self.episode_step}"
