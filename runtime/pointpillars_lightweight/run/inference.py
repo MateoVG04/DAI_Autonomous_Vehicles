@@ -455,8 +455,12 @@ class PointPillarsML:
 
 if __name__ == "__main__":
     logger = logging.getLogger(__name__)
+    logger.info(f"Starting!")
+    print(f"Starting!")
+
     ml_engine = PointPillarsML(ckpt_path="/workspace/PointPillars/pillar_logs/checkpoints/epoch_160.pth") # This could be env variable
     logger.info(f"${ml_engine.__class__} class instantiated")
+    print(f"${ml_engine.__class__} class instantiated")
 
     camera_width = 800
     camera_height = 600
@@ -467,9 +471,10 @@ if __name__ == "__main__":
                                  image_height=camera_height,
                                  max_lidar_points=max_lidar_points)
     logger.info("Shared memory setup")
+    print("Shared memory setup")
 
     # Pyro server
-    PYRO_URI = "PYRO:pyrostateserver@localhost:9090"
+    PYRO_URI = "PYRO:pyrostateserver@localhost:9100"
     remote_monitor = Pyro4.Proxy(PYRO_URI)
     logger.info(f"Connected to Pyro Server at {PYRO_URI}")
 
@@ -477,6 +482,7 @@ if __name__ == "__main__":
     accumulator = PointAccumulator(target_points=40000, max_buffers=3)
 
     logger.info("Starting loop")
+    print("Starting loop")
     while True:
         point_cloud: np.ndarray = shared_memory.read_latest_lidar_points() # 1x4 np.array, x, y, z and intensity
         accumulator.add_points(point_cloud)
@@ -528,5 +534,7 @@ if __name__ == "__main__":
                 logger.warning(e)
 
             logger.info(f"Found ${len(bboxes or [])} bboxes")
+            print(f"Found ${len(bboxes or [])} bboxes")
         else:
             logger.info("No bboxes found")
+            print("No bboxes found")
