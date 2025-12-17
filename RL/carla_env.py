@@ -93,7 +93,7 @@ class CarlaEnv(gym.Env):
 
         #
         self.episode_step = 0
-        self.distance_ahead = 50.0
+        self.distance_ahead = 60.0
         self.collision_history = []
 
         # Camera
@@ -270,72 +270,72 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = [r.actor_id for r in results if not r.error]
         logger.info(f"Successfully spawned {len(self.traffic_actors)} vehicles.")
 
-    def set_distance(self, dist):
-        """Allows the local script to inject the UNet/Lidar distance"""
-        self.distance_ahead = float(dist)
+    # def set_distance(self, dist):
+    #     """Allows the local script to inject the UNet/Lidar distance"""
+    #     self.distance_ahead = float(dist)
 
-    # def _get_gt_distance(self, range_limit=50.0):
-    #     """
-    #     Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
-    #     - Uses vector math to determine relative positions.
-    #     - Considers only vehicles in front and within lane boundaries.
-    #     - Optimized with a quick Euclidean distance check to skip far vehicles.
-    #     - Returns the closest distance found, or the range limit if none found.
-    #
-    #     :param range_limit: Maximum range to consider (meters)
-    #     """
-    #     if not self.ego_vehicle:
-    #         return range_limit
-    #
-    #     # 1. Get Ego Transform
-    #     ego_tf = self.ego_vehicle.get_transform()
-    #     ego_loc = ego_tf.location
-    #     ego_fwd = ego_tf.get_forward_vector()
-    #     ego_right = ego_tf.get_right_vector()
-    #
-    #     # 2. Get all other vehicles
-    #     vehicles = self.world.get_actors().filter('vehicle.*')
-    #
-    #     closest_dist = range_limit
-    #
-    #     for target in vehicles:
-    #         if target.id == self.ego_vehicle.id:
-    #             continue  # Skip ourselves
-    #
-    #         target_loc = target.get_transform().location
-    #
-    #         # Optimization: Quick Euclidian check to skip far cars
-    #         if ego_loc.distance(target_loc) > range_limit:
-    #             continue
-    #
-    #         # 3. Vector Math: Calculate relative position
-    #         # Vector from Ego -> Target
-    #         vec_to_target = carla.Vector3D(
-    #             target_loc.x - ego_loc.x,
-    #             target_loc.y - ego_loc.y,
-    #             target_loc.z - ego_loc.z
-    #         )
-    #
-    #         # Project onto Forward Vector (How far ahead?)
-    #         # Dot Product: A . B
-    #         forward_dist = (vec_to_target.x * ego_fwd.x) + \
-    #                        (vec_to_target.y * ego_fwd.y)
-    #
-    #         # Project onto Right Vector (How far sideways?)
-    #         # Dot Product with Right Vector gives lateral offset
-    #         lateral_dist = (vec_to_target.x * ego_right.x) + \
-    #                        (vec_to_target.y * ego_right.y)
-    #
-    #         # 4. Check if it's in our "Corridor"
-    #         # - Must be in front (forward_dist > 0)
-    #         # - Must be closer than current closest (forward_dist < closest_dist)
-    #         # - Must be in our lane (abs(lateral_dist) < half_lane_width)
-    #         #   Assuming lane width ~3.5m, half is 1.75m. We use 1.5m to be strict.
-    #         if 0 < forward_dist < closest_dist:
-    #             if abs(lateral_dist) < 1.5:
-    #                 closest_dist = forward_dist
-    #
-    #     return closest_dist
+    def _get_gt_distance(self, range_limit=50.0):
+        """
+        Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
+        - Uses vector math to determine relative positions.
+        - Considers only vehicles in front and within lane boundaries.
+        - Optimized with a quick Euclidean distance check to skip far vehicles.
+        - Returns the closest distance found, or the range limit if none found.
+
+        :param range_limit: Maximum range to consider (meters)
+        """
+        if not self.ego_vehicle:
+            return range_limit
+
+        # 1. Get Ego Transform
+        ego_tf = self.ego_vehicle.get_transform()
+        ego_loc = ego_tf.location
+        ego_fwd = ego_tf.get_forward_vector()
+        ego_right = ego_tf.get_right_vector()
+
+        # 2. Get all other vehicles
+        vehicles = self.world.get_actors().filter('vehicle.*')
+
+        closest_dist = range_limit
+
+        for target in vehicles:
+            if target.id == self.ego_vehicle.id:
+                continue  # Skip ourselves
+
+            target_loc = target.get_transform().location
+
+            # Optimization: Quick Euclidian check to skip far cars
+            if ego_loc.distance(target_loc) > range_limit:
+                continue
+
+            # 3. Vector Math: Calculate relative position
+            # Vector from Ego -> Target
+            vec_to_target = carla.Vector3D(
+                target_loc.x - ego_loc.x,
+                target_loc.y - ego_loc.y,
+                target_loc.z - ego_loc.z
+            )
+
+            # Project onto Forward Vector (How far ahead?)
+            # Dot Product: A . B
+            forward_dist = (vec_to_target.x * ego_fwd.x) + \
+                           (vec_to_target.y * ego_fwd.y)
+
+            # Project onto Right Vector (How far sideways?)
+            # Dot Product with Right Vector gives lateral offset
+            lateral_dist = (vec_to_target.x * ego_right.x) + \
+                           (vec_to_target.y * ego_right.y)
+
+            # 4. Check if it's in our "Corridor"
+            # - Must be in front (forward_dist > 0)
+            # - Must be closer than current closest (forward_dist < closest_dist)
+            # - Must be in our lane (abs(lateral_dist) < half_lane_width)
+            #   Assuming lane width ~3.5m, half is 1.75m. We use 1.5m to be strict.
+            if 0 < forward_dist < closest_dist:
+                if abs(lateral_dist) < 1.5:
+                    closest_dist = forward_dist
+
+        return closest_dist
 
     def get_waypoints(self):
         """ Returns the next waypoints from the Local Planner. """
@@ -392,7 +392,7 @@ class CarlaEnv(gym.Env):
             self.lp.set_global_plan(route)
 
             self.collision_history.clear()
-            # self.distance_ahead = self._get_gt_distance()
+            self.distance_ahead = self._get_gt_distance()
             self.episode_step = 0
 
             waypoints, _ = self.get_waypoints()
@@ -459,7 +459,7 @@ class CarlaEnv(gym.Env):
 
             # 4. GET WAYPOINTS & DISTANCE
             waypoints, all_waypoints = self.get_waypoints()
-            # self.distance_ahead = self._get_gt_distance()
+            self.distance_ahead = self._get_gt_distance()
 
             # 5. VISUALIZATION
             if self.episode_step % 2 == 0 and all_waypoints:
@@ -471,7 +471,7 @@ class CarlaEnv(gym.Env):
 
             # 6. OBSERVATION & REWARD
             obs = self._get_obs(waypoints)
-            reward, terminated = self._compute_reward(waypoints, obs)
+            reward, terminated = self._compute_reward(obs)
             truncated = self.episode_step >= MAX_STEPS
 
             self._render_hud(reward)
@@ -532,6 +532,22 @@ class CarlaEnv(gym.Env):
         car_ahead = dist_to_lead < safe_dist
         road_clear = dist_to_lead > 45.0
 
+
+        if speed < 1.0:
+            self.stop_timer += 1
+        else:
+            self.stop_timer = 0
+
+        # If we have been stopped for ~5 seconds (100 ticks), FAIL.
+        # Exception: Don't punish if we are stopped because of traffic (car_ahead)
+        # But even in traffic, we should eventually move if they move.
+        # A simple "blocked" check prevents killing it at a red light/traffic.
+        if self.stop_timer > 500:
+            if not car_ahead:
+                return -500.0, True  # Kill episode if idle on empty road
+            elif self.stop_timer > 1200:
+                return -50.0, True  # Kill if stuck in traffic > 60s
+
         # example
         # speed = 30 km/h = 8 m/s
         # safe_dist = 8*2 = 16 m
@@ -551,12 +567,12 @@ class CarlaEnv(gym.Env):
             target_speed = follow_ratio * speed_limit
 
             # if very close, force full stop
-            if dist_to_lead < 20:
+            if dist_to_lead < 15.0:
                 target_speed = 0.0
 
             # if too close, big penalty
-            if dist_to_lead < 8.0:
-                reward -= 5.0 * (4.0 - dist_to_lead)
+            if dist_to_lead < 6.0:
+                reward -= 5.0 * (6.0 - dist_to_lead)
 
         else:
             # else just go the speed limit
@@ -572,11 +588,8 @@ class CarlaEnv(gym.Env):
             r_speed = -2.5 * speed_error ** 2
         reward += r_speed
 
-
-        if is_turning:
-            if speed < 2.0:
-                reward -= 1.5
-            reward += 0.5 * (speed / speed_limit)
+        steer_norm = obs[-3]
+        is_turning = abs(steer_norm) > 0.2
 
         # --------------------------------------------------
         # 6. Penalties (Stop, Lane, G-Force)
@@ -590,6 +603,10 @@ class CarlaEnv(gym.Env):
             # Lazy Penalty: Punish driving slow on empty road
             if speed < 0.8 * speed_limit and road_clear:
                 reward -= 2.0
+
+        if is_turning:
+            if speed < 2.0: reward -= 1.5  # Don't stop in turn
+            reward += 0.5 * (speed / speed_limit)  # Maintain momentum
 
         # Lane
         cte = obs[-2] * self.lane_width  # denormalize
@@ -606,8 +623,12 @@ class CarlaEnv(gym.Env):
         long_g = abs(accel.x * fwd.x + accel.y * fwd.y + accel.z * fwd.z) / 9.81
         lat_g = abs(accel.x * right.x + accel.y * right.y + accel.z * right.z) / 9.81
 
-        reward -= 0.5 * lat_g * min(speed / 5.0, 1.0)
-        reward -= 0.2 * max(0.0, long_g - 0.5)
+        if is_turning:
+            reward -= 0.2 * lat_g * min(speed / 5.0, 1.0)
+        else:
+            reward -= 0.5 * lat_g * min(speed / 5.0, 1.0)
+        if dist_to_lead > 10.0:
+            reward -= 0.2 * max(0.0, long_g - 0.5)
 
         # --------------------------------------------------
         # 7. Clipping
@@ -636,17 +657,22 @@ class CarlaEnv(gym.Env):
             self.col_sensor.destroy()
             self.col_sensor = None
 
-        if self.camera_manager is not None:
-            for s in self.camera_manager.sensors:
-                if s is not None and s.is_alive:
-                    if s.is_listening:
-                        s.stop()
-                    s.destroy()
-            self.camera_manager = None
-
-        if self.lidar_manager is not None:
-            self.lidar_manager.destroy()
-            self.lidar_manager = None
+        if self.camera_sensor and self.camera_sensor.is_alive:
+            if self.camera_sensor.is_listening: self.camera_sensor.stop()
+            self.camera_sensor.destroy()
+            self.camera_sensor = None
+        #
+        # if self.camera_manager is not None:
+        #     for s in self.camera_manager.sensors:
+        #         if s is not None and s.is_alive:
+        #             if s.is_listening:
+        #                 s.stop()
+        #             s.destroy()
+        #     self.camera_manager = None
+        #
+        # if self.lidar_manager is not None:
+        #     self.lidar_manager.destroy()
+        #     self.lidar_manager = None
 
     def _cleanup_vehicle(self):
         if self.ego_vehicle and self.ego_vehicle.is_alive:
@@ -701,24 +727,25 @@ class CarlaEnv(gym.Env):
                 color=carla.Color(255, 255, 255),  # White text
                 life_time=0.05  # Update every frame (assuming 20fps)
             )
-    def get_latest_image(self):
-        frame = self.shared_memory.read_latest_image()
-        if frame is None:
-            return None, None, None
 
-        h, w, c = frame.shape
-        img_bytes = frame.tobytes()
-
-        # frame_id: if your shared memory wrapper stores it, return it; otherwise 0
-        return img_bytes, (h, w, c), 0
-
-    def get_latest_lidar_points(self):
-        points = self.shared_memory.read_latest_lidar_points()
-        if points is None:
-            return None, None
-
-        # points is (N, 4) float32
-        return points.tobytes(), points.shape
+    # def get_latest_image(self):
+    #     frame = self.shared_memory.read_latest_image()
+    #     if frame is None:
+    #         return None, None, None
+    #
+    #     h, w, c = frame.shape
+    #     img_bytes = frame.tobytes()
+    #
+    #     # frame_id: if your shared memory wrapper stores it, return it; otherwise 0
+    #     return img_bytes, (h, w, c), 0
+    #
+    # def get_latest_lidar_points(self):
+    #     points = self.shared_memory.read_latest_lidar_points()
+    #     if points is None:
+    #         return None, None
+    #
+    #     # points is (N, 4) float32
+    #     return points.tobytes(), points.shape
 
 
     def draw_detections(self, detections, img_width=800, img_height=600):
