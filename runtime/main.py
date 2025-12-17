@@ -4,6 +4,8 @@ import sys
 import time
 
 import carla
+import torch
+from PIL.Image import Image
 from opentelemetry import trace, metrics
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -18,6 +20,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from stable_baselines3 import TD3
 from ultralytics import YOLO
 
+from Machine_Vision.traffic_sign_comprehension import TrafficSignCNN
 from RL.carla_remote_env import RemoteCarlaEnv
 from agents.tools.misc import compute_distance, get_speed
 from visualization.MinimalHUD import MinimalHUD
@@ -254,7 +257,6 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     simstep = 0
     end_simulation = False
 
-
     #### Initialize the models
     model = TD3.load(rl_model_path, env=env)
     obj_detect_model = YOLO(obdt_model_path)
@@ -262,6 +264,12 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     obs, info = env.reset()
     terminated = False
     truncated = False
+
+    traffic_sign_model =  TrafficSignCNN.load_from_checkpoint("/home/shared/3_12_jupyter/bin/MachineVision/unet_multiclass.pth",
+                                                              class_names=["90", "60", "30", "stop"]
+    )
+    traffic_sign_model.to('cuda')
+    traffic_sign_model.eval()
 
     unet_model_path = "/home/shared/3_12_jupyter/bin/simulation/Model/unet_multiclass.pth"
     print("Loading Distance/Lane System...")
@@ -308,7 +316,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                         latest_lidar_cloud = env.get_latest_lidar_points()
                         end = time.time()
                         #print("Get latest lidar cloud: "+ str(end-start)+"s")
-                        if latest_image     is not None:
+                        if latest_image is not None:
                             start = time.time()
                             obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.2)
                             end = time.time()
@@ -321,7 +329,20 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                                 cls = int(obdt_result.boxes.cls[i].cpu().numpy())
                                 name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
                                                                                             "names") else str(cls)
-                                yolo_dets.append((x1, y1, x2, y2, name, conf))
+                                # Traffic sign comprehension
+                                if name == "traffic sign":
+                                    # 1) Crop the detected traffic sign from the image
+                                    # YOLO gives x1,y1,x2,y2 in pixels
+                                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                                    cropped_img = latest_image[y1:y2, x1:x2, :]  # still HWC, RGB
+
+                                    speed = traffic_sign_model(cropped_img)
+
+                                else:
+                                    speed = None
+                                # Append object for drawing
+                                yolo_dets.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, name=name, conf=conf, speed=speed))
+
                         if latest_image is not None and latest_lidar_cloud is not None:
                             start = time.time()
                             distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
@@ -329,6 +350,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                             #print("Distance time: "+ str(end-start)+"s")
                         start = time.time()
                         env.hud_logic(
+                            distance_to_dest=distance,
                             yolo_detections=yolo_dets,
                             dashboard_img=dashboard
                         )
