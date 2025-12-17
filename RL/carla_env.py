@@ -56,7 +56,7 @@ class CarlaEnv(gym.Env):
         self.world = self.client.get_world()
 
         # Map configuration
-        self.maps = ['Town01_Opt', 'Town02_Opt', 'Town03_Opt', 'Town04_Opt']
+        self.maps = ['Town01_Opt', 'Town02_Opt', 'Town03_Opt']
         """
         Training maps:
         Town01 = A small, simple town with a river and several bridges.
@@ -101,7 +101,7 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = None
         self._init_world_settings()
         self._init_traffic_manager()
-        self._load_map("Town01_Opt") # Start on first map
+        self._load_map("Town02_Opt") # Start on first map
 
         self.safety_brake = 0
 
@@ -126,9 +126,9 @@ class CarlaEnv(gym.Env):
         self._cleanup()
 
         if map_name == "Town01_Opt" or map_name == "Town02_Opt":
-            SPAWN_VEHICLES = 25
+            SPAWN_VEHICLES = 35
         if map_name == "Town03_Opt" or map_name == "Town04_Opt":
-            SPAWN_VEHICLES = 50
+            SPAWN_VEHICLES = 60
         self.client.load_world(map_name)
         self.world = self.client.get_world()
         self._init_world_settings()
@@ -157,7 +157,7 @@ class CarlaEnv(gym.Env):
         self.grp = GlobalRoutePlanner(self.world.get_map(), 2.0)
         self.lp = LocalPlanner(self.ego_vehicle, {
             'target_speed': 50,
-            'sampling_radius': 3.0,
+            'sampling_radius': 2.0,
             'lateral_control_dict': {'K_P': 1.0, 'K_D': 0.05, 'dt': 0.05}
         })
 
@@ -422,6 +422,8 @@ class CarlaEnv(gym.Env):
         """
         try:
 
+            self.safety_brake = 0
+
 
             # 1. ACTION
             a = float(np.array(action).squeeze())
@@ -464,7 +466,7 @@ class CarlaEnv(gym.Env):
 
             # 6. OBSERVATION & REWARD
             obs = self._get_obs(waypoints)
-            reward, terminated = self._compute_reward(obs)
+            reward, terminated = self._compute_reward(waypoints, obs)
             truncated = self.episode_step >= MAX_STEPS
 
             self._render_hud(reward)
@@ -492,7 +494,7 @@ class CarlaEnv(gym.Env):
 
         return np.array(obs, dtype=np.float32)
 
-    def _compute_reward(self, obs: np.array) -> tuple:
+    def _compute_reward(self, waypoints: list, obs: np.array) -> tuple:
         """
         Computes the reward for the current state.
         - Penalizes collisions heavily.
@@ -510,7 +512,7 @@ class CarlaEnv(gym.Env):
         # -------------------
         # if collision happened after initial wait period -> big mistake -> wrap it up
         if len(self.collision_history) > 0 and self.episode_step > WAIT_TICKS:
-            return -200.0, True
+            return -300.0, True
 
         # --------------------------------------------------
         # 2. speed, speed limit, safe distance, distance ahead
@@ -519,7 +521,7 @@ class CarlaEnv(gym.Env):
         speed_limit = self.ego_vehicle.get_speed_limit() / 3.6
 
         # safe distance = max(10m, 2 s * speed)
-        safe_dist = max(10.0, speed * 2.0)
+        safe_dist = max(20.0, speed * 2.0)
         dist_to_lead = self.distance_ahead
 
         car_ahead = dist_to_lead < safe_dist
@@ -544,12 +546,13 @@ class CarlaEnv(gym.Env):
             target_speed = follow_ratio * speed_limit
 
             # if very close, force full stop
-            if dist_to_lead < 10:
+            if dist_to_lead < 20:
                 target_speed = 0.0
 
             # if too close, big penalty
-            if dist_to_lead < 5.0:
+            if dist_to_lead < 8.0:
                 reward -= 5.0 * (4.0 - dist_to_lead)
+
 
         else:
             # else just go the speed limit
@@ -562,28 +565,34 @@ class CarlaEnv(gym.Env):
             r_speed = 1.0 - abs(speed_error)
         else:
             # penalize overspeeding harshly
-            r_speed = -3.0 * speed_error ** 2
+            r_speed = -2.5 * speed_error ** 2
         reward += r_speed
 
+        steer_mag = abs(obs[-3])
+        is_turning = steer_mag > 0.15
 
-        # --------------------------------------------------
-        # 5. Progress reward
-        # --------------------------------------------------
-        # if no car ahead, reward progress towards goal
-        if not car_ahead:
+        if is_turning:
+            if speed < 2.0:
+                reward -= 1.5
             reward += 0.5 * (speed / speed_limit)
+
 
         # --------------------------------------------------
         # 6. Penalties (Stop, Lane, G-Force)
         # --------------------------------------------------
         # Lazy Stop
         # if speed is less than half of the speed limit and road is clear, penalize
-        if speed < 0.5 * speed_limit and road_clear:
-            reward -= 2.0
+        if not car_ahead and not is_turning:
+            # Linearly scale up to +1.0 at speed limit
+            reward += 1.5 * (speed / speed_limit)
+
+            # Lazy Penalty: Punish driving slow on empty road
+            if speed < 0.8 * speed_limit and road_clear:
+                reward -= 2.0
 
         # Lane
         cte = obs[-2] * self.lane_width  # denormalize
-        reward -= 0.4 * (cte ** 2)
+        reward -= 0.2 * abs(cte)
 
         # Comfort
         accel = self.ego_vehicle.get_acceleration()
@@ -596,7 +605,7 @@ class CarlaEnv(gym.Env):
         long_g = abs(accel.x * fwd.x + accel.y * fwd.y + accel.z * fwd.z) / 9.81
         lat_g = abs(accel.x * right.x + accel.y * right.y + accel.z * right.z) / 9.81
 
-        reward -= 0.5 * lat_g
+        reward -= 0.5 * lat_g * min(speed / 5.0, 1.0)
         reward -= 0.2 * max(0.0, long_g - 0.5)
 
         # --------------------------------------------------
@@ -608,7 +617,7 @@ class CarlaEnv(gym.Env):
         # 8. Goal
         # --------------------------------------------------
         if self.lp.done():
-            reward += 50.0
+            reward += 100.0
             terminated = True
 
         return reward, terminated
