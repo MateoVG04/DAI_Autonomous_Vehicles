@@ -258,6 +258,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     #### Initialize the models
     model = TD3.load(rl_model_path, env=env)
     obj_detect_model = YOLO(obdt_model_path)
+    obj_detect_model.to('cuda')
     obs, info = env.reset()
     terminated = False
     truncated = False
