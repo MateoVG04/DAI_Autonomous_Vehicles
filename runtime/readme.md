@@ -37,4 +37,9 @@ cd /home/shared/3_12_jupyter/bin/
 python3 -m runtime.main
 ```
 
+## 4) Any shell
+```shell
+sudo docker compose up -d pointpillars
+```
+
 With these steps you can run our project and see the RL agent, object detection, lidar, and distance to vehicle in front
