@@ -117,7 +117,7 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = None
         self._init_world_settings()
         self._init_traffic_manager()
-        self._load_map("Town04_Opt") # Start on first map
+        self._load_map("Town05_Opt") # Start on first map
 
         logger.info("Carla environment initialized")
 
