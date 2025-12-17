@@ -137,7 +137,6 @@ class CarlaEnv(gym.Env):
     def _load_map(self, map_name: str):
         logger.info(f"Loading map: {map_name}")
         self._cleanup()
-
         self.client.load_world(map_name)
         self.world = self.client.get_world()
         self._init_world_settings()

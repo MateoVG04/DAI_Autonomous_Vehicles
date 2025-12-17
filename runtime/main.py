@@ -301,7 +301,6 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                         yolo_dets = []
                         start = time.time()
                         latest_image, _ = env.get_latest_image()
-                        print("latest image:", latest_image)
                         end = time.time()
                         #print("Get latest image: "+ str(end-start)+"s")
                         start = time.time()
