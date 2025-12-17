@@ -283,69 +283,72 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = [r.actor_id for r in results if not r.error]
         logger.info(f"Successfully spawned {len(self.traffic_actors)} vehicles.")
 
+    def set_distance(self, dist):
+        """Allows the local script to inject the UNet/Lidar distance"""
+        self.distance_ahead = float(dist)
 
-    def _get_gt_distance(self, range_limit=50.0):
-        """
-        Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
-        - Uses vector math to determine relative positions.
-        - Considers only vehicles in front and within lane boundaries.
-        - Optimized with a quick Euclidean distance check to skip far vehicles.
-        - Returns the closest distance found, or the range limit if none found.
-
-        :param range_limit: Maximum range to consider (meters)
-        """
-        if not self.ego_vehicle:
-            return range_limit
-
-        # 1. Get Ego Transform
-        ego_tf = self.ego_vehicle.get_transform()
-        ego_loc = ego_tf.location
-        ego_fwd = ego_tf.get_forward_vector()
-        ego_right = ego_tf.get_right_vector()
-
-        # 2. Get all other vehicles
-        vehicles = self.world.get_actors().filter('vehicle.*')
-
-        closest_dist = range_limit
-
-        for target in vehicles:
-            if target.id == self.ego_vehicle.id:
-                continue  # Skip ourselves
-
-            target_loc = target.get_transform().location
-
-            # Optimization: Quick Euclidian check to skip far cars
-            if ego_loc.distance(target_loc) > range_limit:
-                continue
-
-            # 3. Vector Math: Calculate relative position
-            # Vector from Ego -> Target
-            vec_to_target = carla.Vector3D(
-                target_loc.x - ego_loc.x,
-                target_loc.y - ego_loc.y,
-                target_loc.z - ego_loc.z
-            )
-
-            # Project onto Forward Vector (How far ahead?)
-            # Dot Product: A . B
-            forward_dist = (vec_to_target.x * ego_fwd.x) + \
-                           (vec_to_target.y * ego_fwd.y)
-
-            # Project onto Right Vector (How far sideways?)
-            # Dot Product with Right Vector gives lateral offset
-            lateral_dist = (vec_to_target.x * ego_right.x) + \
-                           (vec_to_target.y * ego_right.y)
-
-            # 4. Check if it's in our "Corridor"
-            # - Must be in front (forward_dist > 0)
-            # - Must be closer than current closest (forward_dist < closest_dist)
-            # - Must be in our lane (abs(lateral_dist) < half_lane_width)
-            #   Assuming lane width ~3.5m, half is 1.75m. We use 1.5m to be strict.
-            if 0 < forward_dist < closest_dist:
-                if abs(lateral_dist) < 1.5:
-                    closest_dist = forward_dist
-
-        return closest_dist
+    # def _get_gt_distance(self, range_limit=50.0):
+    #     """
+    #     Calculates the distance to the nearest vehicle in the same lane using CARLA ground truth data
+    #     - Uses vector math to determine relative positions.
+    #     - Considers only vehicles in front and within lane boundaries.
+    #     - Optimized with a quick Euclidean distance check to skip far vehicles.
+    #     - Returns the closest distance found, or the range limit if none found.
+    #
+    #     :param range_limit: Maximum range to consider (meters)
+    #     """
+    #     if not self.ego_vehicle:
+    #         return range_limit
+    #
+    #     # 1. Get Ego Transform
+    #     ego_tf = self.ego_vehicle.get_transform()
+    #     ego_loc = ego_tf.location
+    #     ego_fwd = ego_tf.get_forward_vector()
+    #     ego_right = ego_tf.get_right_vector()
+    #
+    #     # 2. Get all other vehicles
+    #     vehicles = self.world.get_actors().filter('vehicle.*')
+    #
+    #     closest_dist = range_limit
+    #
+    #     for target in vehicles:
+    #         if target.id == self.ego_vehicle.id:
+    #             continue  # Skip ourselves
+    #
+    #         target_loc = target.get_transform().location
+    #
+    #         # Optimization: Quick Euclidian check to skip far cars
+    #         if ego_loc.distance(target_loc) > range_limit:
+    #             continue
+    #
+    #         # 3. Vector Math: Calculate relative position
+    #         # Vector from Ego -> Target
+    #         vec_to_target = carla.Vector3D(
+    #             target_loc.x - ego_loc.x,
+    #             target_loc.y - ego_loc.y,
+    #             target_loc.z - ego_loc.z
+    #         )
+    #
+    #         # Project onto Forward Vector (How far ahead?)
+    #         # Dot Product: A . B
+    #         forward_dist = (vec_to_target.x * ego_fwd.x) + \
+    #                        (vec_to_target.y * ego_fwd.y)
+    #
+    #         # Project onto Right Vector (How far sideways?)
+    #         # Dot Product with Right Vector gives lateral offset
+    #         lateral_dist = (vec_to_target.x * ego_right.x) + \
+    #                        (vec_to_target.y * ego_right.y)
+    #
+    #         # 4. Check if it's in our "Corridor"
+    #         # - Must be in front (forward_dist > 0)
+    #         # - Must be closer than current closest (forward_dist < closest_dist)
+    #         # - Must be in our lane (abs(lateral_dist) < half_lane_width)
+    #         #   Assuming lane width ~3.5m, half is 1.75m. We use 1.5m to be strict.
+    #         if 0 < forward_dist < closest_dist:
+    #             if abs(lateral_dist) < 1.5:
+    #                 closest_dist = forward_dist
+    #
+    #     return closest_dist
 
     def get_waypoints(self):
         """ Returns the next waypoints from the Local Planner. """
@@ -402,7 +405,7 @@ class CarlaEnv(gym.Env):
             self.lp.set_global_plan(route)
 
             self.collision_history.clear()
-            self.distance_ahead = self._get_gt_distance()
+            # self.distance_ahead = self._get_gt_distance()
             self.episode_step = 0
 
             waypoints, _ = self.get_waypoints()
@@ -468,7 +471,7 @@ class CarlaEnv(gym.Env):
 
             # 4. GET WAYPOINTS & DISTANCE
             waypoints, all_waypoints = self.get_waypoints()
-            self.distance_ahead = self._get_gt_distance()
+            # self.distance_ahead = self._get_gt_distance()
 
             # 5. VISUALIZATION
             if self.episode_step % 2 == 0 and all_waypoints:
