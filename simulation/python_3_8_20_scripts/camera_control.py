@@ -21,16 +21,38 @@ class CameraManager:
         """Constructor method"""
         self.sensors = []
         self.surface = None
+        self.front_camera = None
+        self.chase_camera = None
         self._parent = parent_actor
         self.shared_memory = shared_memory
 
         camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
+        CHASE_CAM_TRANSFORM = carla.Transform(
+            carla.Location(x=-6.5, z=2.8),
+            carla.Rotation(pitch=-12.0)
+        )
         blueprint_library = world.get_blueprint_library()
 
         rgb_camera_bp = blueprint_library.find('sensor.camera.rgb')
         rgb_camera_bp.set_attribute('image_size_x', str(camera_width))
         rgb_camera_bp.set_attribute('image_size_y', str(camera_height))
-        self.sensors.append(world.spawn_actor(rgb_camera_bp, camera_transform, attach_to=self._parent))
+
+        self.front_camera = world.spawn_actor(
+            rgb_camera_bp,
+            camera_transform,
+            attach_to=self._parent
+        )
+        self.sensors.append(self.front_camera)
+
+        # Chase camera (NIEUW)
+        self.chase_camera = world.spawn_actor(
+            rgb_camera_bp,
+            CHASE_CAM_TRANSFORM,
+            attach_to=self._parent
+        )
+        self.sensors.append(self.chase_camera)
+        self.chase_camera.listen(self._on_chase_image)
+
 
         # We need to pass the lambda a weak reference to
         # self to avoid circular reference.
@@ -41,6 +63,18 @@ class CameraManager:
         """Render method"""
         if self.surface is not None:
             display.blit(self.surface, (0, 0))
+
+    def _on_chase_image(self, image):
+        self.shared_memory.write_chase_image(image)
+
+    def destroy(self):
+        for sensor in self.sensors:
+            if sensor is not None and sensor.is_alive:
+                sensor.stop()
+                sensor.destroy()
+        self.sensors.clear()
+        self.front_camera = None
+        self.chase_camera = None
 
     @staticmethod
     def _parse_image(weak_self, image):
@@ -71,8 +105,8 @@ class LiDARManager:
         shared_memory,
         range_m: float = 50.0,
         channels: int = 32,
-        points_per_second: int = 56000,
-        rotation_frequency: float = 10.0,
+        points_per_second: int = 100000,
+        rotation_frequency: float = 20.0,
         z_offset: float = 1.73
     ):
         self._parent = parent_actor
@@ -85,13 +119,17 @@ class LiDARManager:
         blueprint_library = world.get_blueprint_library()
         lidar_bp = blueprint_library.find('sensor.lidar.ray_cast')
 
-        lidar_bp.set_attribute('range', str(range_m))
-        lidar_bp.set_attribute('channels', str(channels))
-        lidar_bp.set_attribute('points_per_second', str(points_per_second))
-        lidar_bp.set_attribute('rotation_frequency', str(rotation_frequency))
+        lidar_bp.set_attribute('range', '50')
+        lidar_bp.set_attribute('channels', '64')
+        lidar_bp.set_attribute('points_per_second', '1300000')
+        lidar_bp.set_attribute('rotation_frequency', '20')
+        lidar_bp.set_attribute('upper_fov', '2.0')
+        lidar_bp.set_attribute('lower_fov', '-25.0')
+        lidar_bp.set_attribute('dropoff_general_rate', '0.0')
+
 
         lidar_transform = carla.Transform(
-            carla.Location(x=0.0, z=z_offset)
+            carla.Location(x=1.6, z=1.7)
         )
 
         self.sensor = world.spawn_actor(

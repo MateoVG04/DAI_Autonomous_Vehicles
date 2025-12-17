@@ -1,14 +1,11 @@
 import logging
-import math
 import random
 import sys
-import threading
+import time
 
-import Pyro4
 import carla
-import cv2
-import numpy as np
-import pygame
+import torch
+from PIL.Image import Image
 from opentelemetry import trace, metrics
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -20,268 +17,16 @@ from opentelemetry.sdk.metrics._internal.export import PeriodicExportingMetricRe
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import Status, StatusCode
+from stable_baselines3 import TD3
+from ultralytics import YOLO
 
-from agents.navigation.basic_agent import BasicAgent
+from Machine_Vision.traffic_sign_comprehension import TrafficSignCNN
+from RL.carla_remote_env import RemoteCarlaEnv
 from agents.tools.misc import compute_distance, get_speed
-from simulation.python_3_8_20_scripts.camera_control import CameraManager, LiDARManager
-from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
+from visualization.MinimalHUD import MinimalHUD
+from runtime.Distance import DistanceSystem
 
 print("CARLA loaded from:", carla.__file__)
-
-# ==============================================================================
-# -- Remote Objects --------------------------------------------------------------
-# ==============================================================================
-@Pyro4.expose
-class PyroStateServer:
-    def __init__(self):
-        self.lock = threading.Lock()
-
-        # -----
-        # Specific Communication
-
-        # Lidar:
-        self.latest_lidar_result = {}
-
-    # -----
-    # LiDAR Specific Communication
-    def update_lidar_result(self, bboxes: np.ndarray, labels: np.ndarray, scores: np.ndarray, raw_detects: int):
-        """
-        Called by the inference loop to save new results
-        """
-        with self.lock:
-            # Convert numpy/tensor to standard python lists for serialization
-            self.latest_lidar_result = {
-                "bboxes": bboxes.tolist() if isinstance(bboxes, np.ndarray) else bboxes,
-                "labels": labels.tolist() if isinstance(labels, np.ndarray) else labels,
-                "scores": scores.tolist() if isinstance(scores, np.ndarray) else scores,
-                "raw_detects": raw_detects
-            }
-
-    def get_latest_lidar_result(self):
-        with self.lock:
-            return self.latest_lidar_result.copy()
-
-def start_pyro_daemon(logger, state_obj, pyro_name: str, port=9090):
-    """Starts the Pyro4 server in a background thread"""
-    daemon = Pyro4.Daemon(host="0.0.0.0", port=port)
-    uri = daemon.register(state_obj, pyro_name)
-    logger.info(f"Pyro4 Server Running! Object URI: {uri}")
-    daemon.requestLoop()
-
-# ==============================================================================
-# -- HUD --------------------------------------------------------------
-# ==============================================================================
-class MinimalHUD:
-    def __init__(self, width: int, height: int, shared_memory, pyro_state_server):
-        self.dim = (width, height)
-        self.font = pygame.font.Font(pygame.font.get_default_font(), 16)
-        self.clock = pygame.time.Clock()
-        self.fps = 0.0
-
-        self.shared_memory: CarlaWrapper = shared_memory
-        self.pyro_state_server = pyro_state_server
-
-        self.quad_w = width // 2
-        self.quad_h = height // 2
-
-        # Persistent LiDAR surface for incremental rendering (The "Fading" layer)
-        self.lidar_surface = pygame.Surface((self.quad_w, self.quad_h))
-        self.lidar_surface.fill((0, 0, 0))  # start black
-        self.lidar_surface.set_alpha(255)
-
-    def tick(self):
-        self.clock.tick()
-        self.fps = self.clock.get_fps()
-
-    def render(self, display, vehicle, distance_to_dest: float):
-        # 1. ----- RGB Camera (Top-Left)
-        frame = self.shared_memory.read_latest_image()
-        if frame is not None:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            camera_surf = pygame.surfarray.make_surface(frame_rgb.transpose(1, 0, 2))
-            display.blit(camera_surf, (0, 0))
-
-        # 2. ----- LiDAR Points (Top-Right)
-        # Draw new points onto the persistent fading surface
-        lidar_points = self.shared_memory.read_latest_lidar_points()
-        if lidar_points is not None:
-            self._draw_lidar_incremental(lidar_points)
-        display.blit(self.lidar_surface, (self.quad_w, 0))
-
-        # 3. ----- Detected Objects (Top-Right Overlay) [NEW]
-        # We fetch the latest results
-        lidar_result = self.pyro_state_server.get_latest_lidar_result()
-        bboxes = lidar_result.get('bboxes', [])
-        raw_detected_count = lidar_result.get('raw_detected_count', None) or '/'
-
-        # We draw boxes on a fresh transparent surface to avoid "smearing"
-        if bboxes and len(bboxes) > 0:
-            self._draw_bboxes_overlay(display, bboxes, offset=(self.quad_w, 0))
-
-        # 4. ----- Object Detection Debug View (Bottom-Left)
-        obj_frame = self.shared_memory.read_latest_object_tracking()
-        if obj_frame is not None and obj_frame.size > 0:
-            obj_surf = pygame.surfarray.make_surface(obj_frame.transpose(1, 0, 2))
-            display.blit(obj_surf, (0, self.quad_h))
-
-        # 5. ----- HUD Text / Info Overlay
-        self._render_hud_info(display, vehicle, distance_to_dest, bboxes, raw_detected_count)
-
-    def _render_hud_info(self, display, vehicle, distance, bboxes, raw_detected_count):
-        """Helper to keep render method clean"""
-        hud_surface = pygame.Surface((self.dim[0], self.dim[1]), pygame.SRCALPHA)
-        hud_surface.fill((0, 0, 0, 0))
-
-        vel = vehicle.get_velocity()
-        speed_kmh = 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
-        detected_count = len(bboxes) if bboxes else '/'
-
-        lines = [
-            f"Speed: {speed_kmh:6.1f} km/h",
-            f"Distance: {distance:7.1f} m",
-            f"FPS: {self.fps:5.1f}",
-            f"LIDAR Detected: {detected_count} objects",
-            f"Raw LIDAR: {raw_detected_count} objects",
-        ]
-
-        # Semi-transparent background box
-        info_bg = pygame.Surface((20* len(lines) + 10, 90))
-        info_bg.fill((0, 0, 0))
-        info_bg.set_alpha(140)
-        display.blit(info_bg, (10, 10))
-
-        info_x, info_y = 20, 20
-        for line in lines:
-            text = self.font.render(line, True, (255, 255, 255))
-            display.blit(text, (info_x, info_y))
-            info_y += 20
-
-    def _draw_bboxes_overlay(self, display, bboxes, offset=(0, 0), max_range=50.0):
-        """
-        Draws bounding boxes.
-        We must perform the exact same coordinate transforms as the LiDAR points
-        to ensure they align perfectly.
-        """
-        width, height = self.lidar_surface.get_size()
-
-        # Create a fresh transparent surface
-        bbox_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-        bbox_surface.fill((0, 0, 0, 0))
-
-        # PointPillars Output Format: [x, y, z, dx, dy, dz, rot]
-        # x, y, z: Center
-        # dx, dy, dz: Dimensions (Length, Width, Height)
-        # rot: Yaw angle in radians
-
-        for box in bboxes:
-            # 1. Recover CARLA Coordinates
-            # We flipped Y in inference.py to match KITTI, so we must flip back.
-            # We also flip Rotation because the axis was inverted.
-            cx = box[0]
-            cy = -box[1]  # <--- CRITICAL FIX
-            l = box[3]  # dx (Length)
-            w = box[4]  # dy (Width)
-            rot = -box[6]  # <--- CRITICAL FIX
-
-            # 2. Compute 4 corners of the box (2D) relative to center
-            c, s = math.cos(rot), math.sin(rot)
-
-            # Corner offsets (length is x-axis, width is y-axis)
-            x_corners = [l / 2, l / 2, -l / 2, -l / 2]
-            y_corners = [w / 2, -w / 2, -w / 2, w / 2]
-
-            # Rotate and translate
-            corners_2d = []
-            for i in range(4):
-                # Rotate
-                x_rot = x_corners[i] * c - y_corners[i] * s
-                y_rot = x_corners[i] * s + y_corners[i] * c
-
-                # Translate (World Coords)
-                x_final = cx + x_rot
-                y_final = cy + y_rot
-
-                # 3. Scale to Pixel Coordinates (Matches Lidar Logic)
-                # x_scaled = ((x + range) / (2*range)) * width
-                px = int(((x_final + max_range) / (2 * max_range)) * (width - 1))
-                py = int(((y_final + max_range) / (2 * max_range)) * (height - 1))
-                corners_2d.append((px, py))
-
-            # 4. Draw the Polygon (Yellow)
-            # Line width 2 for visibility
-            pygame.draw.lines(bbox_surface, (255, 255, 0), True, corners_2d, 2)
-
-            # Optional: Draw a line indicating "Forward" direction of the car
-            # Front center point
-            fx = cx + (l / 2 * c)
-            fy = cy + (l / 2 * s)
-            px_f = int(((fx + max_range) / (2 * max_range)) * (width - 1))
-            py_f = int(((fy + max_range) / (2 * max_range)) * (height - 1))
-            # Draw line from center to front
-            # Center pixel
-            px_c = int(((cx + max_range) / (2 * max_range)) * (width - 1))
-            py_c = int(((cy + max_range) / (2 * max_range)) * (height - 1))
-            pygame.draw.line(bbox_surface, (255, 0, 0), (px_c, py_c), (px_f, py_f), 2)
-
-        # 5. Apply the exact same Transform as the LiDAR points
-        # The lidar logic does: Rotate(-90) -> Flip(True, True)
-        bbox_surface = pygame.transform.rotate(bbox_surface, -90)
-        bbox_surface = pygame.transform.flip(bbox_surface, True, True)
-
-        # 6. Blit onto the main display
-        display.blit(bbox_surface, offset)
-
-    def _draw_lidar_incremental(self, points, max_range=50.0):
-        """
-        Draws LiDAR points incrementally on the persistent surface.
-        """
-        width, height = self.lidar_surface.get_size()
-
-        # ----- Fade the existing surface
-        fade_surface = pygame.Surface((width, height))
-        fade_surface.fill((0, 0, 0))
-        fade_surface.set_alpha(15)
-        self.lidar_surface.blit(fade_surface, (0, 0))
-
-        # ----- Convert raw points to numpy array
-        xyz = points[:, :3]
-        intensity = points[:, 3]
-
-        # ----- Project X/Y to 2D surface
-        x_scaled = ((xyz[:, 0] + max_range) / (2 * max_range)) * (width - 1)
-        y_scaled = ((xyz[:, 1] + max_range) / (2 * max_range)) * (height - 1)
-
-        # ----- Filter points that are too close to the center of the surface
-        center_x, center_y = width / 2, height / 2
-        pixel_distances = np.sqrt((x_scaled - center_x) ** 2 + (y_scaled - center_y) ** 2)
-        mask = pixel_distances >= 10  # min pixel distance
-
-        x_filtered = x_scaled[mask].astype(int)
-        y_filtered = y_scaled[mask].astype(int)
-        intensity_filtered = np.clip(intensity[mask] * 10.0, 0, 255).astype(np.uint8)
-
-        # ----- Draw points into temporary surface
-        temp_array = np.zeros((width, height), dtype=np.uint8)
-        temp_array[x_filtered, y_filtered] = intensity_filtered
-
-        temp_surface = pygame.surfarray.make_surface(temp_array)
-        temp_surface = pygame.transform.rotate(temp_surface, -90)  # align axes
-
-        temp_surface = pygame.transform.flip(temp_surface, True, True)  # Flip twice so up means up
-
-        # ----- Blend with persistent surface
-        self.lidar_surface.blit(temp_surface, (0, 0), special_flags=pygame.BLEND_ADD)
-
-    @staticmethod
-    def handle_pygame_events():
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return True
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                return True
-        return False
-
 
 # ==============================================================================
 # -- Telemetry --------------------------------------------------------------
@@ -486,7 +231,12 @@ def set_random_destination(world, agent):
 # ==============================================================================
 # -- main() --------------------------------------------------------------
 # ==============================================================================
-def main():
+
+def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
+    camera_width = 800
+    camera_height = 600
+    max_lidar_points = 120000
+
     # -----
     # Parsing input arguments
     # -----
@@ -494,10 +244,6 @@ def main():
     telemetry_port = 4317
     do_loop = False
     loop_count = 1
-
-    camera_width = 800
-    camera_height = 600
-    max_lidar_points = 120000
 
     # -----
     # Setting up
@@ -508,86 +254,42 @@ def main():
     meter = metrics.get_meter(__name__)
     distance_hist, speed_hist = setup_vehicle_metrics(meter=meter)
 
-    logger.info("carla_env.Client setup started")
-    carla_client = carla.Client('localhost', 2000)
-    setup_carla(logger=logger, client=carla_client)
-    logger.info("Carla Client started setup finished")
-
-    # shared mem
-    shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
-    shared_memory = CarlaWrapper(filename=shared_memory_filepath,
-                                 image_width=camera_width,
-                                 image_height=camera_height,
-                                 max_lidar_points=max_lidar_points)
-
-    # Pyro
-    pyro_name = "pyrostateserver"
-    pyro_port = 9090
-    pyro_state_server = PyroStateServer()
-    pyro_thread = threading.Thread(target=start_pyro_daemon,
-                                   args=(logger, pyro_state_server, pyro_name, pyro_port), daemon=True)
-    pyro_thread.start()
-
-    # Pygame
-    pygame.init()
-    pygame.font.init()
-    hud_width = camera_width * 2  # double width for camera + LiDAR
-    hud_height = camera_height * 2
-    display = pygame.display.set_mode(
-        (hud_width, hud_height),
-        pygame.HWSURFACE | pygame.DOUBLEBUF
-    )
-    pygame.display.set_caption("CARLA Simulation")
-
-    # -----
-    # Starting the control loop
-    # -----
-    # 2) Carla
-    logger.info("Setting up vehicle")
-    world = carla_client.get_world()
-    vehicle = setup_vehicle(world=world)
-
-    npc_ids = spawn_traffic(carla_client, world, amount=50)
-
-    world.tick()  # fixme test if this is required
-
-    logger.info("Setting up cameras")
-    camera = CameraManager(client=carla_client, world=world, parent_actor=vehicle,
-                           camera_width=camera_width,
-                           camera_height=camera_height,
-                           shared_memory=shared_memory)
-
-    lidar = LiDARManager(client=carla_client,
-                         world=world,
-                         parent_actor=vehicle,
-                         shared_memory=shared_memory,
-                         range_m=50.0,
-                         channels=64,
-                         points_per_second=1300000,
-                         rotation_frequency=10.0,
-                         z_offset=1.73
-                         )
-
-    hud = MinimalHUD(hud_width, hud_height, shared_memory=shared_memory, pyro_state_server=pyro_state_server)
-
-    # 3) Agent
-    logger.info("Setting up agent")
-    agent = BasicAgent(vehicle=vehicle, target_speed=30)
-    logger.info(f"Setup finished for vehicle at {vehicle.get_location()}")
-
-    # 4) Simulation
     simstep = 0
     end_simulation = False
 
-    logger.info("Starting simulation")
-    set_random_destination(world, agent)   # fixme, required when running in no-controller mode
+    #### Initialize the models
+    model = TD3.load(rl_model_path, env=env)
+    obj_detect_model = YOLO(obdt_model_path)
+    obj_detect_model.to('cuda')
+    obs, info = env.reset()
+    terminated = False
+    truncated = False
+
+    traffic_sign_model =  TrafficSignCNN.load_from_checkpoint("/home/shared/3_12_jupyter/bin/MachineVision/unet_multiclass.pth",
+                                                              class_names=["90", "60", "30", "stop"]
+    )
+    traffic_sign_model.to('cuda')
+    traffic_sign_model.eval()
+
+    unet_model_path = "/home/shared/3_12_jupyter/bin/simulation/Model/unet_multiclass.pth"
+    print("Loading Distance/Lane System...")
+    # Use 'cuda' if available, otherwise 'cpu'
+    dist_system = DistanceSystem(
+        model_path=unet_model_path,
+        width=camera_width,
+        height=camera_height,
+        fov=90.0,
+        device='cuda'
+    )
+
     try:
         while not end_simulation:
             # Performing full run
             with tracer.start_as_current_span("drive_to_destination") as drive_span:
                 drive_span.set_attribute("destination.distance", 0) # fixme
                 drive_span.set_attribute("loop.count_start", loop_count)
-                while not agent.done():
+                ep_reward = 0.0
+                while not (terminated or truncated):
                     simstep += 1
                     with tracer.start_as_current_span("control_loop") as loop_span:
                         # 1) Pygame events (non-blocking)
@@ -595,77 +297,87 @@ def main():
                             end_simulation = True
                             break
 
-                        # 2) CARLA tick owns time
-                        world.tick()
-                        ts = world.get_snapshot().timestamp
+                        #### Take a step in the environment
+                        start = time.time()
+                        action, _ = model.predict(obs, deterministic=True)
+                        end = time.time()
+                        #print("RL model prediction time: "+ str(end-start)+"s")
+                        start = time.time()
+                        latest_image, _ = env.get_latest_image()
+                        latest_lidar_cloud = env.get_latest_lidar_points()
+                        if latest_image is not None and latest_lidar_cloud is not None:
+                            distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
+                            env.set_distance(distance)
+                        obs, reward, terminated, truncated, info = env.step(action)
 
-                        # 3) Compute distance once (used by HUD + telemetry)
-                        loc = vehicle.get_location()
-                        dest_loc = agent._local_planner._waypoints_queue[-1][0].transform.location \
-                            if agent._local_planner._waypoints_queue else None
-                        dist = compute_distance(loc, dest_loc) if dest_loc else float("inf")
+                        ep_reward += reward
+                        yolo_dets = []
 
-                        # 4) Telemetry (unchanged, cheap)
-                        if ts.frame % 10 == 0:
-                            record_agent_state(
-                                world=world,
-                                vehicle=vehicle,
-                                agent=agent,
-                                logger=logger,
-                                distance_hist=distance_hist,
-                                speed_hist=speed_hist,
-                            )
+                        if latest_image     is not None:
+                        start = time.time()
+                        latest_image, _ = env.get_latest_image()
+                        end = time.time()
+                        #print("Get latest image: "+ str(end-start)+"s")
+                        start = time.time()
+                        latest_lidar_cloud = env.get_latest_lidar_points()
+                        end = time.time()
+                        #print("Get latest lidar cloud: "+ str(end-start)+"s")
+                        if latest_image is not None:
+                            start = time.time()
+                            obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.2)
+                            end = time.time()
+                            #print("Object detection time: "+ str(end-start)+"s")
+                            obdt_result = obdt_results[0]
 
-                        # 5) Agent control
-                        # TODO @mateo RL hier
-                        control = agent.run_step()
-                        control.manual_gear_shift = False
-                        vehicle.apply_control(control)
+                            for i in range(len(obdt_result.boxes)):
+                                x1, y1, x2, y2 = obdt_result.boxes.xyxy[i].cpu().numpy()
+                                conf = float(obdt_result.boxes.conf[i].cpu().numpy())
+                                cls = int(obdt_result.boxes.cls[i].cpu().numpy())
+                                name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
+                                                                                            "names") else str(cls)
+                                yolo_dets.append((x1, y1, x2, y2, name, conf))
+                                # Traffic sign comprehension
+                                if name == "traffic sign":
+                                    # 1) Crop the detected traffic sign from the image
+                                    # YOLO gives x1,y1,x2,y2 in pixels
+                                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                                    cropped_img = latest_image[y1:y2, x1:x2, :]  # still HWC, RGB
 
-                        # 6) HUD overlay
-                        hud.tick()
-                        hud.render(display, vehicle, dist)
+                                    speed = traffic_sign_model(cropped_img)
 
-                        # 8) Flip buffers
-                        pygame.display.flip()
+                                else:
+                                    speed = None
+                                # Append object for drawing
+                                yolo_dets.append(dict(x1=x1, y1=y1, x2=x2, y2=y2, name=name, conf=conf, speed=speed))
 
-                # Trip done
-                drive_span.set_status(Status(StatusCode.OK))
+                        if latest_image is not None and latest_lidar_cloud is not None:
+                            start = time.time()
+                            distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
+                            end = time.time()
+                            #print("Distance time: "+ str(end-start)+"s")
+                        start = time.time()
+                        env.hud_logic(
+                            distance_to_dest=distance,
+                            yolo_detections=yolo_dets,
+                            dashboard_img=dashboard
+                        )
+                        end = time.time()
+                        #print("HUD logic time: "+ str(end-start)+"s")
 
-                set_random_destination(world, agent)
-
+                env.reset()
+                terminated = False
+                truncated = False
                 logger.info("Destination reached")
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt")
-    finally:
-        # -----
-        # Cleaning up
-        # -----
-        logger.info("Closing down ..")
-        pygame.quit()
-        try:
-            for sensor in camera.sensors:
-                sensor.stop()
-                sensor.destroy()
-        except Exception as e:
-            logger.warning(e)
+    except Exception as e:
+        print("Exception: {}".format(e))
 
-        try:
-            carla_client.apply_batch([carla.command.DestroyActor(x) for x in npc_ids])
-        except Exception as e:
-            logger.warning(e)
-
-        try:
-            lidar.sensor.stop()
-            lidar.sensor.destroy()
-        except Exception as e:
-            logger.warning(e)
-
-        try:
-            vehicle.destroy()
-        except Exception as e:
-            logger.warning(e)
-        logger.info("Exitting ..")
 
 if __name__ == '__main__':
-    main()
+    env = RemoteCarlaEnv()
+    # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_3map_traffic_agent"
+    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_carla_500000"
+    obdt_model_path = "/home/shared/3_12_jupyter/bin/Machine_Vision/runs/best_model/best.pt"
+    start = time.time()
+    main(env, rl_model_path, obdt_model_path)
+    end = time.time()
+
