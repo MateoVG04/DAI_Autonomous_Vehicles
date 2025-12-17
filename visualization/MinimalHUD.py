@@ -31,6 +31,9 @@ class MinimalHUD:
         self.lidar_surface.fill((0, 0, 0))  # start black
         self.lidar_surface.set_alpha(255)
 
+        # small state
+        self.last_seen_speed_sign = None
+
     def tick(self):
         self.clock.tick()
         self.fps = self.clock.get_fps()
@@ -107,6 +110,7 @@ class MinimalHUD:
             f"Distance: {distance:7.1f} m",
             f"FPS: {self.fps:5.1f}",
             f"Lidar detected: {detected_count} objects",
+            f"Last seen speed: {self.last_seen_speed_sign or "not yet"}",
         ]
 
         # Semi-transparent background box
@@ -260,6 +264,7 @@ class MinimalHUD:
 
             txt_string = f"{label} {conf:.2f}"
             if speed is not None:
+                self.last_seen_speed_sign = speed
                 txt_string += f" {speed:.2f}"
             txt = font.render(txt_string, True, (0, 255, 0))
             surf.blit(txt, (x1, max(0, y1 - 18)))
