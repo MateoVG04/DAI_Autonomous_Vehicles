@@ -108,11 +108,11 @@ class MinimalHUD:
             f"Speed: {speed_kmh:6.1f} km/h",
             f"Distance: {distance:7.1f} m",
             f"FPS: {self.fps:5.1f}",
-            f"Detected: {detected_count} objects",
+            f"Lidar detected: {detected_count} objects",
         ]
 
         # Semi-transparent background box
-        info_bg = pygame.Surface((260, 90))
+        info_bg = pygame.Surface((20+ len(lines), 90))
         info_bg.fill((0, 0, 0))
         info_bg.set_alpha(140)
         display.blit(info_bg, (10, 10))
@@ -247,12 +247,23 @@ class MinimalHUD:
         surf = display  # pygame Surface
         font = pygame.font.Font(pygame.font.get_default_font(), 18)
 
-        for x1, y1, x2, y2, label, conf in detections:
+        for detection_dict in detections:
+            x1 = detection_dict.get('x1')
+            y1 = detection_dict.get('y1')
+            x2 = detection_dict.get('x2')
+            y2 = detection_dict.get('y2')
+            label = detection_dict.get('label')
+            conf = detection_dict.get('conf')
+            speed = detection_dict.get('speed', None)
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
             w, h = x2 - x1, y2 - y1
 
             pygame.draw.rect(surf, (0, 255, 0), pygame.Rect(x1, y1, w, h), 2)
-            txt = font.render(f"{label} {conf:.2f}", True, (0, 255, 0))
+
+            txt_string = f"{label} {conf:.2f}"
+            if speed is not None:
+                txt_string += f" {speed:.2f}"
+            txt = font.render(txt_string, True, (0, 255, 0))
             surf.blit(txt, (x1, max(0, y1 - 18)))
 
     @staticmethod

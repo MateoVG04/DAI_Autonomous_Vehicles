@@ -1,6 +1,7 @@
 import logging
 import sys
 from collections import deque
+from itertools import islice, pairwise
 
 from tensorboard.compat.tensorflow_stub.errors import InvalidArgumentError
 from torch import Tensor
@@ -333,9 +334,12 @@ class PointAccumulator:
         if len(valid_points) > 0:
             self.buffer.append(valid_points)
 
-    def get_sweep(self) -> np.ndarray:
-        # Stack all buffered frames
-        return np.concatenate(list(self.buffer), axis=0)
+    def get_sweep(self) -> list[np.ndarray]:
+        # Pairwise stacking
+        return [
+            np.concatenate((a, b), axis=0)
+            for a, b in islice(pairwise(self.buffer), 0, None, 2)
+        ]
 
     def is_ready(self) -> bool:
         # Check if we have enough density
@@ -482,13 +486,13 @@ if __name__ == "__main__":
             continue
 
         dense_cloud = accumulator.get_sweep()
-        tensor_input = ml_engine.preprocess(dense_cloud)
-        if tensor_input is None:
+        tensor_input = [ml_engine.preprocess(v) for v in dense_cloud]
+        if not tensor_input:
             logger.info("No valid LiDAR points after preprocessing. Skipping frame.")
             continue
 
         # todo do batching instead of only one frame (like 5->10 maybe?)
-        result = ml_engine.predict([tensor_input])
+        result = ml_engine.predict(tensor_input)
 
         # fixme return object handling -> might not be required to do the instance check but idk how the library works
         if result:
