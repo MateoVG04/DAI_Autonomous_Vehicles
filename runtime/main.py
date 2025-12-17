@@ -303,11 +303,17 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                         end = time.time()
                         #print("RL model prediction time: "+ str(end-start)+"s")
                         start = time.time()
+                        latest_image, _ = env.get_latest_image()
+                        latest_lidar_cloud = env.get_latest_lidar_points()
+                        if latest_image is not None and latest_lidar_cloud is not None:
+                            distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
+                            env.set_distance(distance)
                         obs, reward, terminated, truncated, info = env.step(action)
-                        end = time.time()
-                        #print("RL model step time: "+ str(end-start)+"s")
+
                         ep_reward += reward
                         yolo_dets = []
+
+                        if latest_image     is not None:
                         start = time.time()
                         latest_image, _ = env.get_latest_image()
                         end = time.time()
@@ -329,6 +335,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                                 cls = int(obdt_result.boxes.cls[i].cpu().numpy())
                                 name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
                                                                                             "names") else str(cls)
+                                yolo_dets.append((x1, y1, x2, y2, name, conf))
                                 # Traffic sign comprehension
                                 if name == "traffic sign":
                                     # 1) Crop the detected traffic sign from the image

@@ -194,3 +194,9 @@ class RemoteCarlaEnv(gym.Env):
         # Remote call – server will do world.debug drawing
         self.remote_env.draw_detections(safe_dets, int(img_width), int(img_height))
 
+    def set_distance(self, dist):
+        """Passes the distance to the remote server via Pyro4"""
+        try:
+            self.remote_env.set_distance(float(dist))
+        except Exception as e:
+            logger.error(f"Failed to update distance: {e}")
