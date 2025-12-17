@@ -18,7 +18,7 @@ class VisualLaneTracer:
         # --- STATE ---
         self.last_valid_path = None
         self.dist_history = deque(maxlen=5)
-        self.current_distance = float('inf')
+        self.current_distance = 60.0
 
     def process(self, multiclass_mask, lidar_depth_img, original_image):
         # 1. CREATE BARRIERS
@@ -47,7 +47,7 @@ class VisualLaneTracer:
         Uses the 95th Percentile (closest points) to ignore single-pixel noise.
         """
         if depth_img is None or path_points is None or len(path_points) < 2:
-            return 0, float('inf')
+            return 0, 60.0
 
         # 1. Create Lane Mask
         lane_mask = np.zeros((self.h, self.w), dtype=np.uint8)
@@ -71,7 +71,7 @@ class VisualLaneTracer:
         valid_pixels = depth_channel[(lane_mask == 255) & (depth_channel > 20)]
 
         cutoff_y = 0
-        dist = float('inf')
+        dist = 60.0
 
         if len(valid_pixels) > 5:
             # 3. PERCENTILE FILTER
@@ -90,11 +90,11 @@ class VisualLaneTracer:
 
         # Smoothing
         self.dist_history.append(dist)
-        valid = [d for d in self.dist_history if d != float('inf')]
+        valid = [d for d in self.dist_history if d != 60.0]
         if len(valid) > 0:
             self.current_distance = np.mean(valid)
         else:
-            self.current_distance = float('inf')
+            self.current_distance = 60.0
 
         return cutoff_y, self.current_distance
 

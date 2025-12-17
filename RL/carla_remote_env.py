@@ -91,7 +91,8 @@ class RemoteCarlaEnv(gym.Env):
 
     def hud_logic(self, yolo_detections=None, distance_to_dest=0.0, dashboard_img=None):
         self.hud.tick()
-        self.hud.render(self.display, vehicle=None, distance_to_dest=float(distance_to_dest), lane_dashboard=dashboard_img)
+        speed = self.remote_env.get_speed_vehicle()
+        self.hud.render(self.display, vehicle=None,speed= speed,distance_to_dest=float(distance_to_dest), lane_dashboard=dashboard_img)
 
         if yolo_detections:
             self.hud.draw_yolo_overlay(yolo_detections, self.display)
@@ -109,6 +110,9 @@ class RemoteCarlaEnv(gym.Env):
             except Exception:
                 logger.info("Waiting for CARLA Server...")
                 time.sleep(5)
+
+    def get_speed_vehicle(self):
+        return self.remote_env.get_speed_vehicle()
 
     def reset(self, seed=None, options=None):
         """Resets the remote environment and returns the initial observation."""

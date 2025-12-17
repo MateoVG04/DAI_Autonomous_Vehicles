@@ -313,7 +313,6 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                         ep_reward += reward
                         yolo_dets = []
 
-                        if latest_image     is not None:
                         start = time.time()
                         latest_image, _ = env.get_latest_image()
                         end = time.time()
@@ -335,15 +334,13 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                                 cls = int(obdt_result.boxes.cls[i].cpu().numpy())
                                 name = obj_detect_model.names.get(cls, str(cls)) if hasattr(obj_detect_model,
                                                                                             "names") else str(cls)
-                                yolo_dets.append((x1, y1, x2, y2, name, conf))
                                 # Traffic sign comprehension
                                 if name == "traffic sign":
                                     # 1) Crop the detected traffic sign from the image
                                     # YOLO gives x1,y1,x2,y2 in pixels
                                     x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
                                     cropped_img = latest_image[y1:y2, x1:x2, :]  # still HWC, RGB
-
-                                    speed = traffic_sign_model(cropped_img)
+                                    speed = traffic_sign_model.predict(cropped_img)
 
                                 else:
                                     speed = None
@@ -375,8 +372,8 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
 if __name__ == '__main__':
     env = RemoteCarlaEnv()
     # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_3map_traffic_agent"
-    # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_carla_500000"
-    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/decent_RL_model"
+    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_carla_500000"
+    # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/decent_RL_model"
     obdt_model_path = "/home/shared/3_12_jupyter/bin/Machine_Vision/runs/best_model/best.pt"
     start = time.time()
     main(env, rl_model_path, obdt_model_path)

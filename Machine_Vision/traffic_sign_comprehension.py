@@ -1,6 +1,8 @@
 import os
+from logging import getLogger
+
 import torch
-from PIL.Image import Image
+from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -171,7 +173,6 @@ class TrafficSignCNN(pl.LightningModule):
             transforms.ToTensor(),
             transforms.Normalize((0.5,), (0.5,))
         ])
-
         pil_img = Image.fromarray(image)
         device = next(self.parameters()).device
 
@@ -186,7 +187,7 @@ class TrafficSignCNN(pl.LightningModule):
 
         # 4) Map predicted index to class label
         speed = self.class_names[pred_idx]
-        if confidence < 0.5:
+        if confidence < 0.2:
             speed = None
         return speed
 
