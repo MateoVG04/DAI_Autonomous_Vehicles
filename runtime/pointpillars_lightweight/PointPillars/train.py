@@ -32,8 +32,8 @@ def save_summary(writer, loss_dict, global_step, tag, lr=None, momentum=None):
 
 def main(args):
     wandb.init(
-        project="pointpillars-training",  # Choose your project name
-        config=vars(args),  # Automatically logs all your args as hyperparameters
+        project="pointpillars-training",
+        config=vars(args),
     )
     wandb.config.update({"model_name": "PointPillars"})
     # --------------------------------------
@@ -43,8 +43,8 @@ def main(args):
                           split='train')
     val_dataset = Kitti(data_root=args.data_root,
                         split='val')
-    train_dataloader = get_dataloader(dataset=train_dataset, 
-                                      batch_size=args.batch_size, 
+    train_dataloader = get_dataloader(dataset=train_dataset,
+                                      batch_size=args.batch_size,
                                       num_workers=args.num_workers,
                                       shuffle=True)
     val_dataloader = get_dataloader(dataset=val_dataset, 
@@ -77,16 +77,27 @@ def main(args):
                                                     base_momentum=0.95*0.895, 
                                                     max_momentum=0.95,
                                                     div_factor=10)
+
     saved_logs_path = os.path.join(args.saved_path, 'summary')
     os.makedirs(saved_logs_path, exist_ok=True)
     writer = SummaryWriter(saved_logs_path)
     saved_ckpt_path = os.path.join(args.saved_path, 'checkpoints')
     os.makedirs(saved_ckpt_path, exist_ok=True)
 
+    # Initialize global_step variable
+    global_step = 0
+
     for epoch in range(args.max_epoch):
-        print('=' * 20, epoch, '=' * 20)
-        train_step, val_step = 0, 0
-        for i, data_dict in enumerate(tqdm(train_dataloader)):
+        print('=' * 20, f'Epoch {epoch}', '=' * 20)
+
+        # --- TRAINING LOOP ---
+        pointpillars.train()
+        train_step = 0
+
+        # Use tqdm variable to update description with loss
+        pbar = tqdm(train_dataloader, desc="Training")
+
+        for i, data_dict in enumerate(pbar):
             if not args.no_cuda:
                 # move the tensors to the cuda
                 for key in data_dict:
@@ -145,6 +156,7 @@ def main(args):
             optimizer.step()
             scheduler.step()
 
+            # Global step based on cumulative training batches
             global_step = epoch * len(train_dataloader) + train_step + 1
 
             if global_step % args.log_freq == 0:
@@ -155,9 +167,13 @@ def main(args):
         if (epoch + 1) % args.ckpt_freq_epoch == 0:
             torch.save(pointpillars.state_dict(), os.path.join(saved_ckpt_path, f'epoch_{epoch+1}.pth'))
 
+        # --- VALIDATION LOOP ---
         if epoch % 2 == 0:
             continue
         pointpillars.eval()
+        val_loss_sum = 0.0
+        val_batches = 0
+
         with torch.no_grad():
             for i, data_dict in enumerate(tqdm(val_dataloader)):
                 if not args.no_cuda:
@@ -203,24 +219,30 @@ def main(args):
                 batched_bbox_labels = batched_bbox_labels[batched_label_weights > 0]
 
                 loss_dict = loss_func(bbox_cls_pred=bbox_cls_pred,
-                                    bbox_pred=bbox_pred,
-                                    bbox_dir_cls_pred=bbox_dir_cls_pred,
-                                    batched_labels=batched_bbox_labels, 
-                                    num_cls_pos=num_cls_pos, 
-                                    batched_bbox_reg=batched_bbox_reg, 
-                                    batched_dir_labels=batched_dir_labels)
-                
-                global_step = epoch * len(val_dataloader) + val_step + 1
-                if global_step % args.log_freq == 0:
-                    save_summary(writer, loss_dict, global_step, 'val')
-                val_step += 1
-        pointpillars.train()
+                                      bbox_pred=bbox_pred,
+                                      bbox_dir_cls_pred=bbox_dir_cls_pred,
+                                      batched_labels=batched_bbox_labels,
+                                      num_cls_pos=num_cls_pos,
+                                      batched_bbox_reg=batched_bbox_reg,
+                                      batched_dir_labels=batched_dir_labels)
+
+                val_loss_sum += loss_dict['total_loss'].item()
+                val_batches += 1
+
+        # --- FIX: Log Validation using the Training 'global_step' ---
+        # This keeps the x-axis (Steps) monotonic in WandB
+        avg_val_loss = val_loss_sum / val_batches if val_batches > 0 else 0
+        print(f"\n[Epoch {epoch}] Val Loss: {avg_val_loss:.4f}")
+
+        val_log_dict = {'total_loss': avg_val_loss}
+        save_summary(writer, val_log_dict, global_step, 'val')
+
     wandb.finish()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Configuration Parameters')
-    parser.add_argument('--data_root', default='/mnt/ssd1/lifa_rdata/det/kitti', 
+    parser.add_argument('--data_root', default='/mnt/ssd1/lifa_rdata/det/kitti',
                         help='your data root for kitti')
     parser.add_argument('--saved_path', default='pillar_logs')
     parser.add_argument('--batch_size', type=int, default=6)
