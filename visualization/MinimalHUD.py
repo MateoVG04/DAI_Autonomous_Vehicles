@@ -38,8 +38,6 @@ class MinimalHUD:
     def render(self, display, vehicle, distance_to_dest: float, lane_dashboard=None):
         # 1. ----- RGB Camera (Top-Left)
         frame = self.shared_memory.read_latest_image()
-        print("frame ", frame)
-        self.logger.info("frame", frame)
         if frame is not None:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             camera_surf = pygame.surfarray.make_surface(frame_rgb.transpose(1, 0, 2))
@@ -252,7 +250,7 @@ class MinimalHUD:
             y1 = detection_dict.get('y1')
             x2 = detection_dict.get('x2')
             y2 = detection_dict.get('y2')
-            label = detection_dict.get('label')
+            label = detection_dict.get('name')
             conf = detection_dict.get('conf')
             speed = detection_dict.get('speed', None)
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)

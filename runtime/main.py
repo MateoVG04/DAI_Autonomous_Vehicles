@@ -265,7 +265,7 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
     terminated = False
     truncated = False
 
-    traffic_sign_model =  TrafficSignCNN.load_from_checkpoint("/home/shared/3_12_jupyter/bin/MachineVision/unet_multiclass.pth",
+    traffic_sign_model =  TrafficSignCNN.load_from_checkpoint("/home/shared/3_12_jupyter/bin/Machine_Vision/traffic_sign_comprehension.ckpt",
                                                               class_names=["90", "60", "30", "stop"]
     )
     traffic_sign_model.to('cuda')
@@ -375,7 +375,8 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
 if __name__ == '__main__':
     env = RemoteCarlaEnv()
     # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_3map_traffic_agent"
-    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_carla_500000"
+    # rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/td3_carla_500000"
+    rl_model_path = "/home/shared/3_12_jupyter/bin/RL/Model_TD3/decent_RL_model"
     obdt_model_path = "/home/shared/3_12_jupyter/bin/Machine_Vision/runs/best_model/best.pt"
     start = time.time()
     main(env, rl_model_path, obdt_model_path)
