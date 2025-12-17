@@ -1,10 +1,19 @@
+import random
+
 import gymnasium as gym
 import Pyro4
 import numpy as np
 import logging
 import time
 import serpent
+import threading
+import pygame
 
+from runtime.pyro_state import PyroStateServer
+#from runtime.pointpillars_lightweight.run.inference import CarlaWrapper
+from runtime.CarlaWrapper import CarlaWrapper
+from visualization.MinimalHUD import MinimalHUD
+from runtime.Distance import DistanceSystem
 
 """
 Carla Remote Environment accessed via Pyro4.
@@ -15,6 +24,13 @@ stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(stream_handler)
 
+def start_pyro_daemon(logger, state_obj, pyro_name: str, port=9090):
+    """Starts the Pyro4 server in a background thread"""
+    daemon = Pyro4.Daemon(host="0.0.0.0", port=port)
+    uri = daemon.register(state_obj, pyro_name)
+    logger.info(f"Pyro4 Server Running! Object URI: {uri}")
+    daemon.requestLoop()
+
 # Proxy class to interact with the remote Carla environment
 class RemoteCarlaEnv(gym.Env):
     """
@@ -24,9 +40,41 @@ class RemoteCarlaEnv(gym.Env):
     """
     def __init__(self):
         super().__init__()
+        self.camera_width = 800
+        self.camera_height = 600
+        self.max_lidar_points = 120000
+        self.hud_width = self.camera_width * 2  # double width for camera + LiDAR
+        self.hud_height = self.camera_height * 2
 
         # Establish Pyro4 connection to remote Carla environment
         self.remote_env = Pyro4.Proxy("PYRONAME:carla.environment")
+        # Pyro
+        self.pyro_name = "pyrostateserver"
+        self.pyro_port = random.randint(9100, 9200)
+        self.pyro_state_server = PyroStateServer()
+        self.pyro_thread = threading.Thread(target=start_pyro_daemon,
+                                       args=(logger, self.pyro_state_server, self.pyro_name, self.pyro_port), daemon=True)
+        self.pyro_thread.start()
+
+        # Pygame
+        pygame.init()
+        pygame.font.init()
+        self.display = pygame.display.set_mode(
+            (self.hud_width, self.hud_height),
+            pygame.HWSURFACE | pygame.DOUBLEBUF
+        )
+        # pygame.display.set_caption("CARLA Simulation")
+        pygame.display.set_caption("DAI - AlphaDrive")
+
+        ## Setup shared memory
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v6.dat"
+        self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
+                                          image_width=self.camera_width,
+                                          image_height=self.camera_height,
+                                          max_lidar_points=self.max_lidar_points)
+
+        self.hud = MinimalHUD(self.hud_width, self.hud_height, shared_memory=self.shared_memory,
+                              pyro_state_server=self.pyro_state_server, logger=logger)
 
         # Test connection and get observation dimension
         logger.info("Checking remote connection...")
@@ -40,6 +88,15 @@ class RemoteCarlaEnv(gym.Env):
         # Define action and observation spaces
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32)
+
+    def hud_logic(self, yolo_detections=None, distance_to_dest=0.0, dashboard_img=None):
+        self.hud.tick()
+        self.hud.render(self.display, vehicle=None, distance_to_dest=float(distance_to_dest), lane_dashboard=dashboard_img)
+
+        if yolo_detections:
+            self.hud.draw_yolo_overlay(yolo_detections, self.display)
+
+        pygame.display.flip()
 
     def connect(self):
         """Attempts to connect to the server, retrying indefinitely."""
@@ -65,6 +122,12 @@ class RemoteCarlaEnv(gym.Env):
             self.connect()
 
 
+    def hud_tick(self):
+        self.remote_env.hud_tick()
+
+    def hud_render(self):
+        self.remote_env.hud_render()
+
     def step(self, action: list):
         """Takes a step in the remote environment using the provided action."""
         try:
@@ -75,7 +138,8 @@ class RemoteCarlaEnv(gym.Env):
         except Exception:
             logger.warning("Connection lost during STEP. Waiting for server restart...")
             self.connect()
-            return self.reset()
+            obs, info = self.reset()
+            return obs, 0.0, True, True, info
 
     def close(self):
         try:
@@ -96,6 +160,17 @@ class RemoteCarlaEnv(gym.Env):
         img_np = np.frombuffer(img_bytes, dtype=np.uint8).reshape((h, w, c))
 
         return img_np, frame_id
+
+    def get_latest_lidar_points(self):
+        raw, shape = self.remote_env.get_latest_lidar_points()
+        if raw is None or shape is None:
+            return None
+
+        # Same issue as image bytes: ensure raw is real bytes
+        raw = serpent.tobytes(raw)
+
+        pts = np.frombuffer(raw, dtype=np.float32).reshape(shape)
+        return pts
 
     def draw_detections(self, detections, img_width=800, img_height=600):
         """
