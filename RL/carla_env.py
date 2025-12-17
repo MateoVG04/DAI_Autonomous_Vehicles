@@ -85,7 +85,7 @@ class CarlaEnv(gym.Env):
         self.lidar_manager = None
 
         ## Setup shared memory
-        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+        self.shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v6.dat"
         self.shared_memory = CarlaWrapper(filename=self.shared_memory_filepath,
                                           image_width=self.camera_width,
                                           image_height=self.camera_height,

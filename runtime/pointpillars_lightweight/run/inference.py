@@ -457,7 +457,7 @@ if __name__ == "__main__":
     camera_width = 800
     camera_height = 600
     max_lidar_points = 120000
-    shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v5.dat"
+    shared_memory_filepath = "/dev/shm/carla_shared/carla_shared_v6.dat"
     shared_memory = CarlaWrapper(filename=shared_memory_filepath,
                                  image_width=camera_width,
                                  image_height=camera_height,

@@ -292,29 +292,28 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                         start = time.time()
                         action, _ = model.predict(obs, deterministic=True)
                         end = time.time()
-                        print("RL model prediction time: "+ str(end-start)+"s")
+                        #print("RL model prediction time: "+ str(end-start)+"s")
                         start = time.time()
                         obs, reward, terminated, truncated, info = env.step(action)
                         end = time.time()
-                        print("RL model step time: "+ str(end-start)+"s")
+                        #print("RL model step time: "+ str(end-start)+"s")
                         ep_reward += reward
                         yolo_dets = []
                         start = time.time()
                         latest_image, _ = env.get_latest_image()
+                        print("latest image:", latest_image)
                         end = time.time()
-                        print("Get latest image: "+ str(end-start)+"s")
+                        #print("Get latest image: "+ str(end-start)+"s")
                         start = time.time()
                         latest_lidar_cloud = env.get_latest_lidar_points()
                         end = time.time()
-                        print("Get latest lidar cloud: "+ str(end-start)+"s")
+                        #print("Get latest lidar cloud: "+ str(end-start)+"s")
                         if latest_image     is not None:
                             start = time.time()
-                            obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.1)
+                            obdt_results = obj_detect_model(latest_image, verbose=False, conf=0.2)
                             end = time.time()
-                            print("Object detection time: "+ str(end-start)+"s")
+                            #print("Object detection time: "+ str(end-start)+"s")
                             obdt_result = obdt_results[0]
-
-                            # r.boxes.xyxy, r.boxes.conf, r.boxes.cls
 
                             for i in range(len(obdt_result.boxes)):
                                 x1, y1, x2, y2 = obdt_result.boxes.xyxy[i].cpu().numpy()
@@ -327,14 +326,14 @@ def main(env:RemoteCarlaEnv, rl_model_path, obdt_model_path):
                             start = time.time()
                             distance, dashboard = dist_system.compute(latest_image, latest_lidar_cloud)
                             end = time.time()
-                            print("Distance time: "+ str(end-start)+"s")
+                            #print("Distance time: "+ str(end-start)+"s")
                         start = time.time()
                         env.hud_logic(
                             yolo_detections=yolo_dets,
                             dashboard_img=dashboard
                         )
                         end = time.time()
-                        print("HUD logic time: "+ str(end-start)+"s")
+                        #print("HUD logic time: "+ str(end-start)+"s")
 
                 env.reset()
                 terminated = False

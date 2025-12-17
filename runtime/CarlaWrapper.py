@@ -254,12 +254,12 @@ class CarlaWrapper:
         return self.shared_memory.current_index(shared_array_index=self.CarlaDataType.images.value)
 
     def read_latest_image(self) -> np.ndarray:
-        idx = self.latest_chase_image_index
+        idx = self.latest_image_index
         if idx == 0:
             return None
         slot_index = idx - 1
         return self.shared_memory.read_data(
-            shared_array_index=self.CarlaDataType.chase_images.value,
+            shared_array_index=self.CarlaDataType.images.value,
             slot_index=slot_index
         )
 

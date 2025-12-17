@@ -4,14 +4,17 @@ import cv2
 import numpy as np
 import pygame
 import os
-from simulation.python_3_8_20_scripts.shared_memory_utils import CarlaWrapper
+import logging
+from runtime.CarlaWrapper import CarlaWrapper
+
 
 print("LOADED MinimalHUD FROM:", os.path.abspath(__file__))
 # ==============================================================================
 # -- HUD --------------------------------------------------------------
 # ==============================================================================
 class MinimalHUD:
-    def __init__(self, width: int, height: int, shared_memory, pyro_state_server):
+    def __init__(self, width: int, height: int, shared_memory, pyro_state_server, logger=None):
+        self.logger = logger or logging.getLogger(__name__)
         self.dim = (width, height)
         self.font = pygame.font.Font(pygame.font.get_default_font(), 16)
         self.clock = pygame.time.Clock()
@@ -35,6 +38,8 @@ class MinimalHUD:
     def render(self, display, vehicle, distance_to_dest: float, lane_dashboard=None):
         # 1. ----- RGB Camera (Top-Left)
         frame = self.shared_memory.read_latest_image()
+        print("frame ", frame)
+        self.logger.info("frame", frame)
         if frame is not None:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             camera_surf = pygame.surfarray.make_surface(frame_rgb.transpose(1, 0, 2))

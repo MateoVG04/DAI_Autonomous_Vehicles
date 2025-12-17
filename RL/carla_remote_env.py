@@ -74,7 +74,7 @@ class RemoteCarlaEnv(gym.Env):
                                           max_lidar_points=self.max_lidar_points)
 
         self.hud = MinimalHUD(self.hud_width, self.hud_height, shared_memory=self.shared_memory,
-                              pyro_state_server=self.pyro_state_server)
+                              pyro_state_server=self.pyro_state_server, logger=logger)
 
         # Test connection and get observation dimension
         logger.info("Checking remote connection...")
