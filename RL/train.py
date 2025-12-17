@@ -110,17 +110,20 @@ def train(total_timesteps, save_freq, prev_run_id):
 
     # Dont save if keyboard interrupt (user realised bad training)
     except KeyboardInterrupt:
-        logger.warning("KeyboardInterrupt detected. Saving nothing...")
+        logger.warning("KeyboardInterrupt detected. Saving emergency checkpoint...")
+        model.save(f"{checkpoint_dir}/model_interrupted")
+        model.save_replay_buffer(f"{checkpoint_dir}/buffer_interrupted.pkl")
 
     # Finish training by closing env and stopping run
     finally:
+        env.close()
         run.finish()
         logger.info(f"Total Time: {(time.time() - start_time) // 60:.0f} minutes")
 
 
 if __name__ == '__main__':
-    TOTAL_TIMESTEPS = 100_000
+    TOTAL_TIMESTEPS = 300_000
     SAVE_FREQ = 25_000  # Save buffer
-    PREVIOUS_RUN_ID = "y8tmpvh4"  # Set this string (e.g. "a1b2c3d4") to resume a crash
+    PREVIOUS_RUN_ID = None  # Set this string (e.g. "a1b2c3d4") to resume a crash
     # Hardy elevator
     train(TOTAL_TIMESTEPS, SAVE_FREQ, PREVIOUS_RUN_ID)
