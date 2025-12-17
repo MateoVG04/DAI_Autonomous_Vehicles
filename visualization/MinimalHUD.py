@@ -38,7 +38,7 @@ class MinimalHUD:
         self.clock.tick()
         self.fps = self.clock.get_fps()
 
-    def render(self, display, vehicle, distance_to_dest: float, lane_dashboard=None):
+    def render(self, display, vehicle,speed, distance_to_dest: float, lane_dashboard=None):
         # 1. ----- RGB Camera (Top-Left)
         frame = self.shared_memory.read_latest_image()
         if frame is not None:
@@ -91,18 +91,17 @@ class MinimalHUD:
             except Exception as e:
                 print(f"HUD Error (Lane Dash): {e}")
         # 5. ----- HUD Text / Info Overlay
-        self._render_hud_info(display, vehicle, distance_to_dest, bboxes)
+        self._render_hud_info(display, vehicle, distance_to_dest, bboxes, speed)
 
-    def _render_hud_info(self, display, vehicle, distance, bboxes):
+    def _render_hud_info(self, display, vehicle, distance, bboxes, speed):
         """Helper to keep render method clean"""
         hud_surface = pygame.Surface((self.dim[0], self.dim[1]), pygame.SRCALPHA)
         hud_surface.fill((0, 0, 0, 0))
 
-        if vehicle is None:
+        if speed is None:
             speed_kmh = 0.0
         else:
-            vel = vehicle.get_velocity()
-            speed_kmh = 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
+            speed_kmh = speed
 
         detected_count = len(bboxes) if bboxes else '/'
         lines = [
@@ -262,10 +261,11 @@ class MinimalHUD:
 
             pygame.draw.rect(surf, (0, 255, 0), pygame.Rect(x1, y1, w, h), 2)
 
-            txt_string = f"{label} {conf:.2f}"
+            txt_string = f"{label}"
             if speed is not None:
                 self.last_seen_speed_sign = speed
-                txt_string += f" {speed:.2f}"
+                txt_string += speed+'-'
+            txt_string += f" {conf:.2f}"
             txt = font.render(txt_string, True, (0, 255, 0))
             surf.blit(txt, (x1, max(0, y1 - 18)))
 

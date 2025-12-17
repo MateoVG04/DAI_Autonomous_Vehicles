@@ -116,7 +116,8 @@ class CarlaEnv(gym.Env):
         self.traffic_actors = None
         self._init_world_settings()
         self._init_traffic_manager()
-        self._load_map("Town05_Opt") # Start on first map
+        self._load_map("Town02_Opt") # Start on first map
+        self.client.get_world().set_weather(carla.WeatherParameters.ClearNoon)
 
         logger.info("Carla environment initialized")
 
@@ -134,7 +135,7 @@ class CarlaEnv(gym.Env):
         self.tm.set_global_distance_to_leading_vehicle(3)
 
     def _load_map(self, map_name: str):
-        SPAWN_VEHICLES = 15
+        SPAWN_VEHICLES = 50
         logger.info(f"Loading map: {map_name}")
         self._cleanup()
         self.client.load_world(map_name)
@@ -510,6 +511,11 @@ class CarlaEnv(gym.Env):
         )
 
         return np.array(obs, dtype=np.float32)
+
+    @Pyro4.expose
+    def get_speed_vehicle(self):
+        speed, _ = get_vehicle_speed_accel(self.ego_vehicle)
+        return speed * 3.6
 
     def _compute_reward(self, obs: np.array) -> tuple:
         """
