@@ -214,9 +214,9 @@ class CarlaEnv(gym.Env):
                              parent_actor=self.ego_vehicle,
                              shared_memory=self.shared_memory,
                              range_m=50.0,
-                             channels=64,
-                             points_per_second=1300000,
-                             rotation_frequency=10.0,
+                             channels=32,
+                             points_per_second=100000,
+                             rotation_frequency=20.0,
                              z_offset=1.73
                              )
 

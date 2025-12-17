@@ -105,8 +105,8 @@ class LiDARManager:
         shared_memory,
         range_m: float = 50.0,
         channels: int = 32,
-        points_per_second: int = 56000,
-        rotation_frequency: float = 10.0,
+        points_per_second: int = 100000,
+        rotation_frequency: float = 20.0,
         z_offset: float = 1.73
     ):
         self._parent = parent_actor
@@ -119,13 +119,17 @@ class LiDARManager:
         blueprint_library = world.get_blueprint_library()
         lidar_bp = blueprint_library.find('sensor.lidar.ray_cast')
 
-        lidar_bp.set_attribute('range', str(range_m))
-        lidar_bp.set_attribute('channels', str(channels))
-        lidar_bp.set_attribute('points_per_second', str(points_per_second))
-        lidar_bp.set_attribute('rotation_frequency', str(rotation_frequency))
+        lidar_bp.set_attribute('range', '50')
+        lidar_bp.set_attribute('channels', '64')
+        lidar_bp.set_attribute('points_per_second', '1300000')
+        lidar_bp.set_attribute('rotation_frequency', '20')
+        lidar_bp.set_attribute('upper_fov', '2.0')
+        lidar_bp.set_attribute('lower_fov', '-25.0')
+        lidar_bp.set_attribute('dropoff_general_rate', '0.0')
+
 
         lidar_transform = carla.Transform(
-            carla.Location(x=0.0, z=z_offset)
+            carla.Location(x=1.6, z=1.7)
         )
 
         self.sensor = world.spawn_actor(
